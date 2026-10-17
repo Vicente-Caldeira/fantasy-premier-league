@@ -46,6 +46,11 @@ sources:
         meta:
           external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/football_data/matches/*/data.parquet', hive_partitioning = false, union_by_name = true)"
           dagster: {asset_key: [silver, football_data, matches]}
+      - name: upcoming_matches
+        description: Daily snapshots of pre-match odds for upcoming fixtures.
+        meta:
+          external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/football_data/upcoming_matches/*/data.parquet', hive_partitioning = false, union_by_name = true)"
+          dagster: {asset_key: [silver, football_data, upcoming_matches]}
 
   - name: understat
     description: Understat team-level xG, 2014-15 onwards.

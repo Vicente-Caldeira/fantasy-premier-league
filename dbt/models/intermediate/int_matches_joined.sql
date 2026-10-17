@@ -3,6 +3,7 @@
 -- (season, home, away) identifies a match in every source.
 with fpl as (select * from {{ ref('int_fpl_fixtures') }}),
 fd as (select * from {{ ref('stg_football_data__matches') }}),
+upcoming as (select * from {{ ref('stg_football_data__upcoming_matches') }}),
 us as (select * from {{ ref('stg_understat__matches') }}),
 elo as (
     select elo.*, home.team_key as home_team_key, away.team_key as away_team_key
@@ -42,17 +43,18 @@ select
     fd.home_shots_on_target,
     fd.away_shots_on_target,
     fd.referee,
-    fd.odds_home,
-    fd.odds_draw,
-    fd.odds_away,
-    fd.odds_over_2_5,
-    fd.odds_under_2_5,
+    -- Played matches carry their opening odds; upcoming ones the latest snapshot's.
+    coalesce(fd.odds_home, upcoming.odds_home) as odds_home,
+    coalesce(fd.odds_draw, upcoming.odds_draw) as odds_draw,
+    coalesce(fd.odds_away, upcoming.odds_away) as odds_away,
+    coalesce(fd.odds_over_2_5, upcoming.odds_over_2_5) as odds_over_2_5,
+    coalesce(fd.odds_under_2_5, upcoming.odds_under_2_5) as odds_under_2_5,
     fd.close_odds_home,
     fd.close_odds_draw,
     fd.close_odds_away,
     fd.close_odds_over_2_5,
     fd.close_odds_under_2_5,
-    fd.odds_1x2_source,
+    coalesce(fd.odds_1x2_source, upcoming.odds_1x2_source) as odds_1x2_source,
     fd.close_odds_1x2_source,
 
     us.understat_match_id,
@@ -84,5 +86,6 @@ select
 from match_keys
 left join fpl using (season, home_team_key, away_team_key)
 left join fd using (season, home_team_key, away_team_key)
+left join upcoming using (season, home_team_key, away_team_key)
 left join us using (season, home_team_key, away_team_key)
 left join elo using (season, home_team_key, away_team_key)
