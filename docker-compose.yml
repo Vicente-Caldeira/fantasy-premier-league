@@ -1,0 +1,81 @@
+# Full local stack. `make up`, then:
+#   web http://localhost:3000 · api http://localhost:8000/docs
+#   dagster http://localhost:3001 · mlflow http://localhost:5050
+name: fpl
+
+x-dagster: &dagster
+  image: fpl-pipelines:local
+  build:
+    context: .
+    dockerfile: docker/python.Dockerfile
+    args: { PACKAGE: fpl-pipelines }
+  environment:
+    DAGSTER_HOME: /opt/dagster_home
+    DAGSTER_POSTGRES_URL: postgresql://fpl:fpl@postgres:5432/dagster
+    MLFLOW_TRACKING_URI: http://mlflow:5000
+  volumes:
+    - ./pipelines/dagster_home:/opt/dagster_home:ro
+  depends_on:
+    postgres: { condition: service_healthy }
+
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: fpl
+      POSTGRES_PASSWORD: fpl
+      POSTGRES_DB: fpl
+    ports: ["5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U fpl"]
+      interval: 2s
+      retries: 30
+
+  mlflow:
+    build:
+      context: .
+      dockerfile: docker/mlflow.Dockerfile
+    command: >
+      mlflow server --host 0.0.0.0 --port 5000
+      --backend-store-uri postgresql://fpl:fpl@postgres:5432/mlflow
+      --artifacts-destination /mlartifacts
+      --allowed-hosts "localhost:5050,127.0.0.1:5050,mlflow:5000"
+    ports: ["5050:5000"]
+    volumes: [mlartifacts:/mlartifacts]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  dagster-webserver:
+    <<: *dagster
+    command: dagster-webserver -h 0.0.0.0 -p 3001 -w /opt/dagster_home/workspace.yaml
+    ports: ["3001:3001"]
+
+  dagster-daemon:
+    <<: *dagster
+    command: dagster-daemon run -w /opt/dagster_home/workspace.yaml
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/python.Dockerfile
+      args: { PACKAGE: fpl-api }
+    command: uvicorn fpl_api.main:app --host 0.0.0.0 --port 8080
+    environment:
+      FPL_API_ENVIRONMENT: local
+    ports: ["8000:8080"]
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  web:
+    build:
+      context: apps/web
+      dockerfile: ../../docker/web.Dockerfile
+    ports: ["3000:8080"]
+    depends_on: [api]
+
+volumes:
+  pgdata:
+  mlartifacts:

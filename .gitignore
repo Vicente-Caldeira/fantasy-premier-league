@@ -1,0 +1,37 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Node / Next.js
+node_modules/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+infra/terraform/**/.build/
+
+# Local data & secrets
+.env
+.env.*
+!.env.example
+data/
+mlruns/
+mlartifacts/
+
+# OS / editors
+.DS_Store
+.idea/
+.vscode/

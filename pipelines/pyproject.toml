@@ -1,0 +1,23 @@
+[project]
+name = "fpl-pipelines"
+version = "0.0.0"
+description = "Dagster code location: ingestion, transformation, training and inference"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "fpl-core",
+    "fpl-models",
+    "dagster>=1.9",
+    "dagster-postgres>=0.25",
+    "dagster-webserver>=1.9",
+    "psycopg[binary]>=3.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/fpl_pipelines"]
+
+[tool.dagster]
+module_name = "fpl_pipelines.definitions"

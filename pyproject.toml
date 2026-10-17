@@ -1,0 +1,72 @@
+[project]
+name = "fantasy-premier-league"
+version = "0.0.0"
+description = "Production-grade ML platform for Fantasy Premier League expected points"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[tool.uv]
+package = false
+
+[tool.uv.workspace]
+members = ["packages/*", "apps/api", "pipelines"]
+
+[tool.uv.sources]
+fpl-core = { workspace = true }
+fpl-models = { workspace = true }
+fpl-api = { workspace = true }
+fpl-pipelines = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "fpl-core",
+    "fpl-models",
+    "fpl-api",
+    "fpl-pipelines",
+    "httpx2",
+    "hypothesis>=6.100",
+    "mypy>=1.13",
+    "pre-commit>=4.0",
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "N", "SIM", "RUF", "PL", "PT", "ANN", "S", "TID"]
+ignore = ["PLR2004"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["fpl_core", "fpl_models", "fpl_api", "fpl_pipelines"]
+
+[tool.ruff.lint.per-file-ignores]
+"**/tests/**" = ["S101", "ANN", "PLR2004"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.mypy]
+python_version = "3.12"
+files = ["packages/fpl_core/src", "packages/fpl_models/src", "apps/api/src", "pipelines/src"]
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["dagster.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+addopts = "-ra --strict-markers --import-mode=importlib"
+testpaths = ["packages", "apps/api", "pipelines"]
+
+[tool.coverage.run]
+source = ["fpl_core", "fpl_models", "fpl_api", "fpl_pipelines"]
+branch = true
+
+[tool.coverage.report]
+skip_empty = true
