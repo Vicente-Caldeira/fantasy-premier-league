@@ -36,6 +36,14 @@ def fixture_rows(n_players=6, gameweeks=8, season="2024-25", double_gw=4):
                     "tackles": int(rng.integers(0, 6)),
                     "clearances_blocks_interceptions": int(rng.integers(0, 8)),
                     "recoveries": int(rng.integers(0, 8)),
+                    "opponent_team_key": f"t{(p + 1) % 2}",
+                    "touches_opposition_box": int(rng.integers(0, 8)),
+                    "chances_created": int(rng.integers(0, 4)),
+                    "total_shots": int(rng.integers(0, 5)),
+                    "opta_xgot": float(rng.random()),
+                    "big_chances_missed": int(rng.integers(0, 2)),
+                    "selected": int(rng.integers(1_000, 1_000_000)),
+                    "transfers_balance": int(rng.integers(-50_000, 50_000)),
                 })  # fmt: skip
     return pf.add_deadlines(pl.DataFrame(rows))
 
@@ -54,7 +62,7 @@ def test_features_do_not_change_when_later_data_is_removed(cutoff):
     full = pf.build_features(rows, lambdas(rows))
     truncated_rows = rows.filter(pl.col("gameweek") <= cutoff)
     truncated = pf.build_features(truncated_rows, lambdas(truncated_rows))
-    columns = ["player_code", "match_key", *pf.FEATURES]
+    columns = ["player_code", "match_key", *pf.ALL_FEATURES, *pf.CROWD_LAGGED, *pf.OPTA_FEATURES]
     expected = (
         full.filter(pl.col("gameweek") == cutoff).select(columns).sort("player_code", "match_key")
     )
@@ -77,6 +85,15 @@ def test_gameweek_features_ignore_that_gameweeks_results():
     )
     changed = pf.build_features(changed_rows, lambdas(changed_rows)).filter(pl.col("gameweek") == 5)
     assert base.select(pf.FEATURES).equals(changed.select(pf.FEATURES))
+
+
+def test_lagged_crowd_signal_is_the_previous_gameweeks_window():
+    rows = fixture_rows()
+    feats = pf.build_features(rows, lambdas(rows)).filter(pl.col("player_code") == 0)
+    by_gw = {r["gameweek"]: r for r in feats.unique("gameweek").iter_rows(named=True)}
+    assert by_gw[3]["crowd_net_transfer_rate_prev"] == pytest.approx(
+        by_gw[2]["crowd_net_transfer_rate"]
+    )
 
 
 def test_both_double_gameweek_fixtures_share_pre_deadline_state():
@@ -170,7 +187,7 @@ def test_defensive_contribution_only_counts_under_its_rules():
 
 def test_masked_estimator_survives_an_all_missing_column():
     x = np.column_stack([np.arange(50.0), np.full(50, np.nan)])
-    model = pm.Masked(pm._regressor()).fit(x, np.arange(50) % 3)
+    model = pm.Masked(pm._regressor(pm.ModelConfig())).fit(x, np.arange(50) % 3)
     prediction = model.predict(np.array([[3.0, 7.0]]))
     assert np.isfinite(prediction).all()
 
@@ -187,9 +204,9 @@ def test_component_model_trains_only_on_earlier_deadlines():
     seen = {}
     original = pm.fit_components
 
-    def spy(train, defcon_train):
+    def spy(train, defcon_train, config):
         seen["max"] = train["deadline_utc"].max()
-        return original(train, defcon_train)
+        return original(train, defcon_train, config)
 
     pm.fit_components = spy
     try:
@@ -238,3 +255,27 @@ def test_availability_scales_next_gameweek_and_zeroes_departed_players():
     assert by[(1, 9)] == by[(1, 10)] == 1.0  # available
     assert (by[(2, 9)], by[(2, 10)]) == (0.5, 1.0)  # doubtful: next gameweek only
     assert by[(3, 9)] == by[(3, 10)] == 0.0  # unavailable (left the club)
+
+
+def test_schedule_counts_rest_days_and_recent_matches():
+    matches = pl.DataFrame({
+        "match_key": ["a", "b", "c"],
+        "kickoff_utc": [START, START + timedelta(days=3), START + timedelta(days=10)],
+        "home_team_key": ["x", "y", "x"], "away_team_key": ["y", "x", "z"],
+    })  # fmt: skip
+    sched = pf.schedule_features(matches)
+    x = {r["match_key"]: r for r in sched.filter(pl.col("team_key") == "x").iter_rows(named=True)}
+    assert x["a"]["rest_days"] is None
+    assert x["b"]["rest_days"] == pytest.approx(3.0)
+    assert x["c"]["rest_days"] == pytest.approx(7.0)
+    assert x["c"]["matches_prev_14d"] == 2
+
+
+def test_reconcile_makes_player_goals_add_up_to_the_team():
+    rows = pl.DataFrame({"match_key": ["m"] * 3, "team_key": ["t"] * 3, "team_lambda": [2.0] * 3})
+    events = pl.DataFrame({"e_goals_scored": [0.3, 0.1, 0.0], "e_assists": [0.1, 0.1, 0.2]})
+    out = pm.reconcile(rows, events, {"e_goals_scored": 0.97, "e_assists": 0.75})
+    assert out["e_goals_scored"].sum() == pytest.approx(0.97 * 2.0)
+    assert out["e_assists"].sum() == pytest.approx(0.75 * 2.0)
+    # Shares are preserved: the first player still scores three times the second.
+    assert out["e_goals_scored"][0] == pytest.approx(3 * out["e_goals_scored"][1])
