@@ -115,9 +115,21 @@ def test_two_played_rows_for_one_fixture_fail():
         src.deduplicate(src.parse_player_matches(to_csv(rows), "2025-26"))
 
 
+def test_mid_season_transfer_keeps_the_team_actually_played_for():
+    # players_raw is end-of-season: player 7 is listed at team 4 after a January move.
+    players = src.parse_players(to_csv([player(7, 4), player(8, 3), player(9, 5)]), "2020-21")
+    before = [match(7, 1, 5, was_home="True"), match(9, 1, 3, was_home="False")]  # 3 v 5
+    after = [match(7, 2, 3, was_home="True"), match(8, 2, 4, was_home="False")]  # 4 v 3
+    rows = src.parse_player_matches(to_csv(before + after), "2020-21")
+    teams = src.enrich(rows, players).filter(pl.col("element") == 7)
+    assert teams.sort("fixture")["team_code"].to_list() == [53, 54]
+
+
 def test_enrich_maps_season_ids_to_stable_codes():
     players = src.parse_players(to_csv([player(7, 3), player(8, 4)]), "2020-21")
-    matches = src.parse_player_matches(to_csv([match(7, 1, 4)]), "2020-21")
+    matches = src.parse_player_matches(
+        to_csv([match(7, 1, 4), match(8, 1, 3, was_home="False")]), "2020-21"
+    )
     row = src.enrich(matches, players).row(0, named=True)
     assert (row["player_code"], row["team_code"], row["opponent_team_code"]) == (1007, 53, 54)
 

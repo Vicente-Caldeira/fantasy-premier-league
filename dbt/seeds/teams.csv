@@ -1,0 +1,37 @@
+team_key,name,short_name,fpl_team_code,football_data_name,understat_team_id,understat_name
+arsenal,Arsenal,ARS,3,Arsenal,83,Arsenal
+aston_villa,Aston Villa,AVL,7,Aston Villa,71,Aston Villa
+bournemouth,Bournemouth,BOU,91,Bournemouth,73,Bournemouth
+brentford,Brentford,BRE,94,Brentford,244,Brentford
+brighton,Brighton,BHA,36,Brighton,220,Brighton
+burnley,Burnley,,90,Burnley,92,Burnley
+cardiff,Cardiff,,97,Cardiff,227,Cardiff
+chelsea,Chelsea,CHE,8,Chelsea,80,Chelsea
+coventry,Coventry City,COV,9,Coventry,294,Coventry
+crystal_palace,Crystal Palace,CRY,31,Crystal Palace,78,Crystal Palace
+everton,Everton,EVE,11,Everton,72,Everton
+fulham,Fulham,FUL,54,Fulham,228,Fulham
+huddersfield,Huddersfield,,38,Huddersfield,219,Huddersfield
+hull,Hull City,HUL,88,Hull,91,Hull
+ipswich,Ipswich Town,IPS,40,Ipswich,285,Ipswich
+leeds,Leeds,LEE,2,Leeds,245,Leeds
+leicester,Leicester,,13,Leicester,75,Leicester
+liverpool,Liverpool,LIV,14,Liverpool,87,Liverpool
+luton,Luton,,102,Luton,256,Luton
+man_city,Man City,MCI,43,Man City,88,Manchester City
+man_united,Man Utd,MUN,1,Man United,89,Manchester United
+middlesbrough,Middlesbrough,,25,Middlesbrough,93,Middlesbrough
+newcastle,Newcastle,NEW,4,Newcastle,86,Newcastle United
+norwich,Norwich,,45,Norwich,79,Norwich
+nottm_forest,Nott'm Forest,NFO,17,Nott'm Forest,249,Nottingham Forest
+queens_park_rangers,Queens Park Rangers,,,,202,Queens Park Rangers
+sheffield_united,Sheffield United,,49,Sheffield United,238,Sheffield United
+southampton,Southampton,,20,Southampton,74,Southampton
+stoke,Stoke,,110,Stoke,85,Stoke
+sunderland,Sunderland,SUN,56,Sunderland,77,Sunderland
+swansea,Swansea,,80,Swansea,84,Swansea
+tottenham,Spurs,TOT,6,Tottenham,82,Tottenham
+watford,Watford,,57,Watford,90,Watford
+west_brom,West Brom,,35,West Brom,76,West Bromwich Albion
+west_ham,West Ham,,21,West Ham,81,West Ham
+wolves,Wolves,,39,Wolves,229,Wolverhampton Wanderers

@@ -1,0 +1,14 @@
+version: 2
+
+models:
+  - name: int_fpl_fixtures
+    columns:
+      - name: home_team_key
+        data_tests: [not_null]
+      - name: away_team_key
+        data_tests: [not_null]
+  - name: int_matches_joined
+    description: Each source's view of every match, side by side. Tested for agreement.
+    columns:
+      - name: match_key
+        data_tests: [unique, not_null]

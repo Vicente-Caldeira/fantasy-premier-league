@@ -1,0 +1,56 @@
+version: 2
+
+# Silver Parquet tables written by the Dagster ingestion assets, read from the lake root
+# in FPL_LAKE_URL (a local path in dev, gs://<bucket> in prod). Files carry their
+# partition value (season / snapshot_date) as a column, so hive partitioning is off.
+# `meta.dagster.asset_key` links each source to the asset that produces it, so dbt
+# models appear downstream of ingestion in the Dagster asset graph.
+
+sources:
+  - name: fpl
+    description: Official FPL API, daily snapshots (2026-27 onwards).
+    tables:
+      - name: teams
+        meta:
+          external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/fpl/teams/*/data.parquet', hive_partitioning = false, union_by_name = true)"
+          dagster: {asset_key: [silver, fpl, teams]}
+      - name: fixtures
+        meta:
+          external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/fpl/fixtures_table/*/data.parquet', hive_partitioning = false, union_by_name = true)"
+          dagster: {asset_key: [silver, fpl, fixtures_table]}
+
+  - name: vaastav
+    description: Historical FPL player-match data, 2016-17 .. 2025-26.
+    tables:
+      - name: player_matches
+        meta:
+          external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/vaastav/player_matches/*/data.parquet', hive_partitioning = false, union_by_name = true)"
+          dagster: {asset_key: [silver, vaastav, player_matches]}
+
+  - name: football_data
+    description: football-data.co.uk results and bookmaker odds, 2016-17 onwards.
+    tables:
+      - name: matches
+        meta:
+          external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/football_data/matches/*/data.parquet', hive_partitioning = false, union_by_name = true)"
+          dagster: {asset_key: [silver, football_data, matches]}
+
+  - name: understat
+    description: Understat team-level xG, 2014-15 onwards.
+    tables:
+      - name: matches
+        meta:
+          external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/understat/matches/*/data.parquet', hive_partitioning = false, union_by_name = true)"
+          dagster: {asset_key: [silver, understat, matches]}
+      - name: team_matches
+        meta:
+          external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/understat/team_matches/*/data.parquet', hive_partitioning = false, union_by_name = true)"
+          dagster: {asset_key: [silver, understat, team_matches]}
+
+  - name: fpl_elo_insights
+    description: FPL-Elo-Insights Opta-style match stats, 2024-25 onwards.
+    tables:
+      - name: matches
+        meta:
+          external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/fpl_elo_insights/matches/*/data.parquet', hive_partitioning = false, union_by_name = true)"
+          dagster: {asset_key: [silver, fpl_elo_insights, matches]}

@@ -1,0 +1,27 @@
+version: 2
+
+# Every source's clubs must map to a team key; a null here means the crosswalk seed is
+# missing a club (re-run scripts/build_team_crosswalk.py).
+models:
+  - name: stg_football_data__matches
+    columns:
+      - name: home_team_key
+        data_tests: [not_null]
+      - name: away_team_key
+        data_tests: [not_null]
+  - name: stg_understat__matches
+    columns:
+      - name: home_team_key
+        data_tests: [not_null]
+      - name: away_team_key
+        data_tests: [not_null]
+  - name: stg_understat__team_matches
+    columns:
+      - name: team_key
+        data_tests: [not_null]
+      - name: understat_match_id
+        data_tests: [not_null]
+  - name: stg_fpl__fixtures
+    columns:
+      - name: fpl_fixture_id
+        data_tests: [unique, not_null]

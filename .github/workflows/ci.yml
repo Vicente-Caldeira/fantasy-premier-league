@@ -24,6 +24,9 @@ jobs:
       - run: uv run ruff check .
       - run: uv run ruff format --check .
       - run: uv run mypy
+      - name: dbt parse (validates models, sources and tests without data)
+        working-directory: dbt
+        run: uv run dbt parse --profiles-dir .
       - run: uv run pytest --cov --cov-report=term-missing
       - name: Billing kill-switch tests
         working-directory: infra/terraform/bootstrap/functions/billing_kill_switch

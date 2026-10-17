@@ -1,0 +1,30 @@
+name: fpl
+version: "0.1.0"
+config-version: 2
+profile: fpl
+
+model-paths: ["models"]
+seed-paths: ["seeds"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+target-path: target
+clean-targets: [target, dbt_packages]
+
+models:
+  fpl:
+    staging:
+      +materialized: view
+    intermediate:
+      +materialized: view
+    marts:
+      +materialized: table
+
+seeds:
+  fpl:
+    teams:
+      +column_types:
+        fpl_team_code: integer
+        understat_team_id: integer
+
+data_tests:
+  +severity: error

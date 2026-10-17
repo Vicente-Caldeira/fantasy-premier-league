@@ -181,9 +181,13 @@ def test_schedule_targets_todays_partition():
     assert schedule.job_name == daily_snapshot_job.name
 
 
-def test_every_check_is_partitioned():
-    # Unpartitioned checks load every partition of their asset and crash once a second
-    # snapshot exists, so each check must share its asset's partitioning.
+def test_every_check_shares_its_assets_partitioning():
+    # A check on a partitioned asset that isn't partitioned itself loads every partition
+    # and crashes once a second one exists. (dbt tests on unpartitioned models are fine.)
     graph = defs.resolve_asset_graph()
-    unpartitioned = [k.name for k in graph.asset_check_keys if graph.get(k).partitions_def is None]
-    assert unpartitioned == []
+    mismatched = [
+        key.name
+        for key in graph.asset_check_keys
+        if graph.get(key).partitions_def != graph.get(key.asset_key).partitions_def
+    ]
+    assert mismatched == []
