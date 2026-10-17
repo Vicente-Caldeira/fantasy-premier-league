@@ -79,6 +79,26 @@ Same as `all_in` without reconcile; crowd ownership is now the fraction of manag
 
 Directly, xG-only vs 50/50: MAE −0.011 (−0.016, −0.005), significant; top-11 −1.1 (−2.8, +0.5), not significant. **Both cut MAE by ~3%**, the largest gain so far. Decision metrics can't separate them, so **season simulation is the tie-breaker** (below).
 
+## Season simulation (the acceptance test)
+
+`fpl_models.season_sim` manages a team through a whole past season with decisions made blind:
+- at each deadline, only data from before it is used;
+- the next gameweek is predicted with the crowd model, later gameweeks with the planning model and ratings-based team strength;
+- the optimiser picks transfers, the XI and the captain (3-gameweek horizon);
+- scoring is real: captain/vice fallback, formation-valid auto-subs, hits, real price changes and the selling rule.
+
+No chips are used.
+
+| Config | 2021-22 | 2022-23 | Total | Hits |
+|---|---|---|---|---|
+| baseline | 1925 | 2195 | 4120 | 85 |
+| xG targets (1.0) | 2184 | 2228 | 4412 (**+292**) | 60 |
+| 50/50 targets (0.5) | 2184 | 2235 | 4419 (**+299**) | 64 |
+
+FPL only has xG from 2022-23, so the two target variants are identical on 2021-22. **+7 points on one season is noise.** Per-gameweek metrics favour pure xG on MAE and the blend on decisions, a wash, so the simpler **pure xG** is kept.
+
+These totals aren't comparable to real managers' scores: no chips, and no in-season squad from GW1 history.
+
 ## Backlog (ranked by expected value)
 
 | Idea | Why it might help | Status |

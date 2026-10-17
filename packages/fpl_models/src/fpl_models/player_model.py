@@ -26,6 +26,8 @@ from fpl_models.player_features import (
     CROWD_ALL,
     FEATURES,
     POSITIONS,
+    SCHEDULE_FEATURES,
+    add_schedule,
     feature_matrix,
     latest_player_state,
 )
@@ -110,6 +112,23 @@ class ModelConfig:
             "categorical_features": [self.features.index(POSITION_FEATURE)],
             "random_state": 0,
         }
+
+
+# Chosen on the tuning seasons (docs/model-experiments.md, rounds 1-4 + season simulation).
+PRODUCTION = ModelConfig(
+    recency_half_life_days=180,
+    l2_regularization=1.0,
+    min_samples_leaf=100,
+    learning_rate=0.03,
+    max_iter=400,
+    denoise_weight=1.0,
+    features=(
+        *FEATURES,
+        "crowd_ownership",
+        "crowd_net_transfer_share",
+        *SCHEDULE_FEATURES,
+    ),
+)
 
 
 def _regressor(config: ModelConfig) -> HistGradientBoostingRegressor:
@@ -403,19 +422,21 @@ def with_live_crowd(rows: pl.DataFrame, squads: pl.DataFrame, next_gameweek: int
     return joined.with_columns(pl.when(is_next).then(pl.col(c)).alias(c) for c in columns)
 
 
-def predict_upcoming(
+def predict_upcoming(  # noqa: PLR0913 - extras are keyword-only
     features: pl.DataFrame,
     squads: pl.DataFrame,
     fixtures: pl.DataFrame,
     gameweeks: list[int],
     *,
     config: ModelConfig | None = None,
+    schedule: pl.DataFrame | None = None,
 ) -> pl.DataFrame:
     """Expected points per player for each of `gameweeks` (deadlines still to come).
 
     `features` are all played fixture rows (from `build_features`): the training data,
     and the history each player's latest state is computed from. Trains on the latest
-    `config.train_seasons` seasons (DefCon on all labelled history).
+    `config.train_seasons` seasons (DefCon on all labelled history). `schedule`
+    (`player_features.schedule_features`) is required when the config uses it.
     """
     if not gameweeks:
         raise ValueError("no upcoming gameweeks to predict")
@@ -430,6 +451,9 @@ def predict_upcoming(
         latest_player_state(features), on="player_code", how="left"
     )
     rows = with_live_crowd(rows, squads, next_gameweek=gameweeks[0])
+    if schedule is not None:
+        # The latest state carries the *last played* fixture's schedule: replace it.
+        rows = add_schedule(rows.drop(SCHEDULE_FEATURES, strict=False), schedule)
 
     crowd = [c for c in config.features if c in CROWD_ALL]
     if crowd and len(gameweeks) > 1:

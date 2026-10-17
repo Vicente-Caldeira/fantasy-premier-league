@@ -279,3 +279,51 @@ def test_reconcile_makes_player_goals_add_up_to_the_team():
     assert out["e_assists"].sum() == pytest.approx(0.75 * 2.0)
     # Shares are preserved: the first player still scores three times the second.
     assert out["e_goals_scored"][0] == pytest.approx(3 * out["e_goals_scored"][1])
+
+
+def test_live_crowd_is_a_share_of_the_open_window_for_the_next_gameweek_only():
+    live = squads().with_columns(
+        selected_by_percent=pl.Series(["40.0", "5.0", "0.1"]),
+        transfers_in_event=pl.Series([300, 0, 100]),
+        transfers_out_event=pl.Series([0, 100, 0]),
+    )
+    rows = pm.upcoming_fixture_rows(live, fixture_expectations(), [9, 10])
+    crowd = pm.with_live_crowd(rows, live, next_gameweek=9)
+    by = {(r["player_code"], r["gameweek"]): r for r in crowd.iter_rows(named=True)}
+    assert by[(1, 9)]["crowd_net_transfer_share"] == pytest.approx(300 / 500)
+    assert by[(2, 9)]["crowd_net_transfer_share"] == pytest.approx(-100 / 500)
+    assert by[(1, 9)]["crowd_ownership"] == pytest.approx(0.4)
+    assert by[(1, 10)]["crowd_net_transfer_share"] is None
+
+
+def test_production_config_predicts_end_to_end():
+    from dataclasses import replace  # noqa: PLC0415
+
+    played = fixture_rows()
+    matches = played.filter(pl.col("is_home")).select(
+        "match_key", "kickoff_utc",
+        pl.col("team_key").alias("home_team_key"),
+        pl.col("opponent_team_key").alias("away_team_key"),
+    ).unique()  # fmt: skip
+    upcoming = pl.DataFrame({
+        "match_key": ["n1", "n2"], "season": ["2024-25"] * 2, "gameweek": [9, 10],
+        "kickoff_utc": [START + timedelta(days=70), START + timedelta(days=77)],
+        "home_team_key": ["t0", "t1"], "away_team_key": ["t1", "t0"],
+        "lambda_home": [1.6, 1.3], "lambda_away": [1.0, 1.2],
+    })  # fmt: skip
+    schedule = pf.schedule_features(pl.concat([matches, upcoming.select(matches.columns)]))
+    features = pf.build_features(played, lambdas(played), schedule)
+    live = pl.DataFrame({
+        "player_code": list(range(6)), "web_name": list("abcdef"),
+        "position": [pf.POSITIONS[p % 4] for p in range(6)],
+        "team_key": [f"t{p % 2}" for p in range(6)], "price": [50 + p for p in range(6)],
+        "status": ["a"] * 6, "chance_of_playing_next_round": [None] * 6,
+        "selected_by_percent": ["10.0"] * 6, "transfers_in_event": [10, 0, 5, 0, 3, 1],
+        "transfers_out_event": [0, 4, 0, 2, 0, 0],
+    })  # fmt: skip
+    config = replace(pm.PRODUCTION, max_iter=10, min_samples_leaf=2)
+    predicted = pm.predict_upcoming(
+        features, live, upcoming, [9, 10], config=config, schedule=schedule
+    )
+    assert predicted.height == 12
+    assert predicted["expected_points"].is_finite().all()
