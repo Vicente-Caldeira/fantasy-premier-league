@@ -4,7 +4,7 @@
 
 resource "google_pubsub_topic" "budget" {
   name       = "billing-budget-alerts"
-  depends_on = [google_project_service.this]
+  depends_on = [time_sleep.api_propagation]
 }
 
 resource "google_billing_budget" "monthly" {
@@ -43,6 +43,7 @@ resource "google_billing_budget" "monthly" {
 resource "google_service_account" "kill_switch" {
   account_id   = "billing-kill-switch"
   display_name = "Disables billing when the budget is exceeded"
+  depends_on   = [time_sleep.api_propagation]
 }
 
 resource "google_project_iam_member" "kill_switch_billing" {
@@ -83,7 +84,7 @@ resource "google_artifact_registry_repository" "functions" {
     }
   }
 
-  depends_on = [google_project_service.this]
+  depends_on = [time_sleep.api_propagation]
 }
 
 # Dedicated identities instead of the default compute service account, whose broad
@@ -91,6 +92,7 @@ resource "google_artifact_registry_repository" "functions" {
 resource "google_service_account" "kill_switch_builder" {
   account_id   = "billing-kill-switch-builder"
   display_name = "Builds the billing kill-switch function"
+  depends_on   = [time_sleep.api_propagation]
 }
 
 resource "google_project_iam_member" "kill_switch_builder" {
@@ -107,6 +109,7 @@ resource "google_project_iam_member" "kill_switch_builder" {
 resource "google_service_account" "kill_switch_trigger" {
   account_id   = "billing-kill-switch-trigger"
   display_name = "Delivers budget alerts to the billing kill-switch"
+  depends_on   = [time_sleep.api_propagation]
 }
 
 resource "google_project_iam_member" "kill_switch_trigger" {
@@ -165,7 +168,7 @@ resource "google_cloudfunctions2_function" "kill_switch" {
   }
 
   depends_on = [
-    google_project_service.this,
+    time_sleep.api_propagation,
     google_project_iam_member.kill_switch_builder,
     google_project_iam_member.kill_switch_trigger,
   ]

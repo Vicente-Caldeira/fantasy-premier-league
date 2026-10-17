@@ -10,14 +10,18 @@ terraform {
       source  = "hashicorp/archive"
       version = "~> 2.6"
     }
+    time = {
+      source  = "hashicorp/time"
+      version = "~> 0.12"
+    }
   }
 
-  # Bootstrap starts with local state. After the first apply, uncomment and run
-  # `terraform init -migrate-state` to move state into the bucket it created.
-  # backend "gcs" {
-  #   bucket = "<project_id>-tfstate"
-  #   prefix = "bootstrap"
-  # }
+  # On a brand-new project, comment this out for the first apply (the bucket does not
+  # exist yet), then run `terraform init -migrate-state`.
+  backend "gcs" {
+    bucket = "fplvicentecaldeira-tfstate"
+    prefix = "bootstrap"
+  }
 }
 
 provider "google" {

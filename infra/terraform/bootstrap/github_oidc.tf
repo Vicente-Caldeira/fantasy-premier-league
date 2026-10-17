@@ -3,7 +3,7 @@
 resource "google_iam_workload_identity_pool" "github" {
   workload_identity_pool_id = "github"
   display_name              = "GitHub Actions"
-  depends_on                = [google_project_service.this]
+  depends_on                = [time_sleep.api_propagation]
 }
 
 resource "google_iam_workload_identity_pool_provider" "github" {
@@ -26,6 +26,7 @@ resource "google_iam_workload_identity_pool_provider" "github" {
 resource "google_service_account" "deployer" {
   account_id   = "github-deployer"
   display_name = "CI/CD deployer for ${var.github_repository}"
+  depends_on   = [time_sleep.api_propagation]
 }
 
 resource "google_service_account_iam_member" "deployer_wif" {

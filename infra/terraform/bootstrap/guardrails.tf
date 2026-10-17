@@ -16,7 +16,7 @@ resource "google_cloud_quotas_quota_preference" "bigquery_query_per_day" {
     preferred_value = tostring(var.bigquery_daily_query_limit_gib * 1024) # unit is MiB
   }
 
-  depends_on = [google_project_service.this]
+  depends_on = [time_sleep.api_propagation]
 }
 
 resource "google_billing_budget" "account_wide" {
@@ -83,5 +83,5 @@ resource "terraform_data" "spend_cap" {
     command = "python3 ${path.module}/scripts/spend_cap.py delete '${jsonencode(self.triggers_replace)}'"
   }
 
-  depends_on = [google_project_service.this]
+  depends_on = [time_sleep.api_propagation]
 }
