@@ -24,8 +24,20 @@ variable "github_repository" {
   type        = string
 }
 
-variable "budget_amount_usd" {
-  description = "Monthly spend at which billing is automatically disabled."
+variable "budget_amount" {
+  description = "Monthly spend, in the billing account's currency, at which billing is disabled."
   type        = number
   default     = 1
+}
+
+variable "budget_currency" {
+  description = "Must match the billing account's currency."
+  type        = string
+  default     = "EUR"
+}
+
+variable "bigquery_daily_query_limit_gib" {
+  description = "Hard per-project cap on BigQuery bytes scanned per day. 30 GiB x 31 days stays under the 1 TiB/month free tier."
+  type        = number
+  default     = 30
 }

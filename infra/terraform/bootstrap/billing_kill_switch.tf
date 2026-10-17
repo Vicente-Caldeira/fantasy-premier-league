@@ -13,12 +13,16 @@ resource "google_billing_budget" "monthly" {
 
   budget_filter {
     projects = ["projects/${data.google_project.this.number}"]
+    # Subtract only Always Free usage. Trial/promotional credits are NOT subtracted, so
+    # spend they would silently absorb still trips the kill-switch.
+    credit_types_treatment = "INCLUDE_SPECIFIED_CREDITS"
+    credit_types           = ["FREE_TIER"]
   }
 
   amount {
     specified_amount {
-      currency_code = "USD"
-      units         = tostring(var.budget_amount_usd)
+      currency_code = var.budget_currency
+      units         = tostring(var.budget_amount)
     }
   }
 
@@ -30,8 +34,9 @@ resource "google_billing_budget" "monthly" {
   }
 
   all_updates_rule {
-    pubsub_topic   = google_pubsub_topic.budget.id
-    schema_version = "1.0"
+    pubsub_topic                   = google_pubsub_topic.budget.id
+    schema_version                 = "1.0"
+    disable_default_iam_recipients = false
   }
 }
 
