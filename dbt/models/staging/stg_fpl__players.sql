@@ -12,6 +12,7 @@ select
     now_cost,
     selected_by_percent,
     status,
-    news
+    news,
+    chance_of_playing_next_round
 from {{ source('fpl', 'players') }}
 qualify snapshot_date = max(snapshot_date) over ()
