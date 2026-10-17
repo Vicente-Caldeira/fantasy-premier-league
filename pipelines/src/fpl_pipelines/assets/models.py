@@ -6,9 +6,11 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import dagster as dg
+import duckdb
 import polars as pl
 
-from fpl_models import team_strength
+from fpl_models import player_features, player_model, team_strength
+from fpl_models.backtest import Predictor
 from fpl_models.baselines import BASELINES
 from fpl_models.data import load_player_matches, player_gameweeks
 from fpl_models.leaderboard import EVALUATION_SEASONS, PRIMARY_METRIC, leaderboard, to_markdown
@@ -51,8 +53,14 @@ def backtest_leaderboard(
 
     Each run is also logged to MLflow when MLFLOW_TRACKING_URI is set.
     """
+    warehouse = _warehouse()
+    features = player_features.build_features(
+        player_features.load_fixture_rows(warehouse),
+        player_features.match_lambdas(team_strength.load_matches(warehouse)),
+    )
+    predictors: list[Predictor] = [*BASELINES, player_model.ComponentModel(features)]
     board = leaderboard(
-        BASELINES, player_gameweeks(load_player_matches(_warehouse())), EVALUATION_SEASONS
+        predictors, player_gameweeks(load_player_matches(warehouse)), EVALUATION_SEASONS
     )
     uri = _write_parquet(
         lake, f"gold/backtests/leaderboard/run_at={_stamp()}/leaderboard.parquet", board
@@ -126,5 +134,41 @@ def fixture_lambdas(lake: Lake) -> dg.MaterializeResult[None]:
             "uri": uri,
             "fixtures": expectations.height,
             **{f"from_{k}": v for k, v in sources.items()},
+        }
+    )
+
+
+@dg.asset(
+    key=["gold", "player_points", "expected_points"],
+    deps=[dg.AssetKey("fct_player_matches"), dg.AssetKey("current_squads"), fixture_lambdas],
+    group_name="models",
+)
+def expected_points(lake: Lake) -> dg.MaterializeResult[None]:
+    """Expected points per player for each of the next five gameweeks.
+
+    Component models trained on all history, applied to each squad player's latest
+    state and the current team-strength fixture expectations, adjusted for FPL's
+    availability flags.
+    """
+    warehouse = _warehouse()
+    matches = team_strength.load_matches(warehouse)
+    features = player_features.build_features(
+        player_features.load_fixture_rows(warehouse), player_features.match_lambdas(matches)
+    )
+    fixtures = team_strength.fixture_expectations(matches, as_of=datetime.now(UTC))
+    with duckdb.connect(str(warehouse), read_only=True) as connection:
+        squads = connection.sql("select * from current_squads").pl()
+    predictions = player_model.predict_upcoming(features, squads, fixtures, horizon=5)
+
+    path = f"gold/player_points/expected_points/as_of={_stamp()}/data.parquet"
+    uri = _write_parquet(lake, path, predictions)
+    next_gw = predictions.filter(pl.col("gameweek") == predictions["gameweek"].min())
+    top = next_gw.head(10).select("web_name", "position", "team_key", "price", "expected_points")
+    return dg.MaterializeResult(
+        metadata={
+            "uri": uri,
+            "players": predictions["player_code"].n_unique(),
+            "gameweeks": ", ".join(str(g) for g in predictions["gameweek"].unique().sort()),
+            "top_next_gameweek": dg.MetadataValue.md(to_markdown(top, top.columns)),
         }
     )
