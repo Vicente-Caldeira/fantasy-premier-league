@@ -10,6 +10,9 @@ dependencies = [
     "dagster-postgres>=0.25",
     "dagster-webserver>=1.9",
     "psycopg[binary]>=3.2",
+    "polars>=2.0",
+    "fsspec>=2026.9",
+    "gcsfs>=2026.9",
 ]
 
 [build-system]

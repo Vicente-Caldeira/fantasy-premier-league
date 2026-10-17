@@ -3,7 +3,10 @@ name = "fpl-core"
 version = "0.0.0"
 description = "FPL domain model: positions, scoring rules, shared schemas"
 requires-python = ">=3.12,<3.13"
-dependencies = ["pydantic>=2.9"]
+dependencies = [
+    "httpx>=0.28",
+    "pydantic>=2.9",
+]
 
 [build-system]
 requires = ["hatchling"]
