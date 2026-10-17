@@ -70,6 +70,31 @@ EXPERIMENTS: dict[str, player_model.ModelConfig] = {
     ),
 }
 
+# Round 3: everything that helped, then remove one piece at a time (ablation).
+TUNED = replace(
+    BASE, recency_half_life_days=180, l2_regularization=1.0, min_samples_leaf=100,
+    learning_rate=0.03, max_iter=400,
+)  # fmt: skip
+ALL_IN = replace(
+    TUNED, denoise_targets=True, reconcile=True,
+    features=BASE.features + player_features.CROWD_SHARE + player_features.SCHEDULE_FEATURES,
+)  # fmt: skip
+EXPERIMENTS |= {
+    "all_in": ALL_IN,
+    "all_no_denoise": replace(ALL_IN, denoise_targets=False),
+    "all_no_reconcile": replace(ALL_IN, reconcile=False),
+    "all_no_schedule": replace(ALL_IN, features=BASE.features + player_features.CROWD_SHARE),
+    "all_no_crowd": replace(ALL_IN, features=BASE.features + player_features.SCHEDULE_FEATURES),
+    "all_untuned": replace(
+        ALL_IN,
+        recency_half_life_days=None,
+        l2_regularization=0.0,
+        min_samples_leaf=20,
+        learning_rate=0.05,
+        max_iter=200,
+    ),
+}
+
 
 def per_gameweek(predictions: pl.DataFrame, gameweeks: pl.DataFrame) -> pl.DataFrame:
     """Per-gameweek sufficient statistics, so differences can be bootstrapped."""

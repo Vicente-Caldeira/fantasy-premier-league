@@ -13,6 +13,8 @@ select
     selected_by_percent,
     status,
     news,
-    chance_of_playing_next_round
+    chance_of_playing_next_round,
+    transfers_in_event,
+    transfers_out_event
 from {{ source('fpl', 'players') }}
 qualify snapshot_date = max(snapshot_date) over ()

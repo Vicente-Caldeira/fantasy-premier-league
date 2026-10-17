@@ -55,7 +55,8 @@ CROWD_CURRENT = ("crowd_log_owners", "crowd_net_transfer_rate")
 # Window-invariant variant: a player's net transfers as a share of all transfer
 # activity in the gameweek so far. Its meaning barely depends on how far into the
 # window it is measured, so complete-window training data matches partial live data.
-CROWD_SHARE = ("crowd_log_owners", "crowd_net_transfer_share")
+CROWD_SHARE = ("crowd_ownership", "crowd_net_transfer_share")
+CROWD_ALL = (*CROWD_CURRENT, *CROWD_SHARE, *CROWD_LAGGED)
 
 # Opta detail (FPL-Elo-Insights, 2024-25 onwards; null before): per-90, EWM.
 OPTA_STATS = (
@@ -307,6 +308,12 @@ def crowd_features(rows: pl.DataFrame) -> pl.DataFrame:
                 .over("season", "gameweek")
                 .clip(lower_bound=1)
             ).alias("crowd_net_transfer_share"),
+            # Fraction of managers owning him: every manager owns exactly 15 players, so
+            # managers = all ownership / 15. Stable as FPL grows, unlike raw counts.
+            (
+                pl.col("selected")
+                / (pl.col("selected").sum().over("season", "gameweek") / 15).clip(lower_bound=1)
+            ).alias("crowd_ownership"),
         )
     )
     return per_gw.select(
@@ -314,6 +321,7 @@ def crowd_features(rows: pl.DataFrame) -> pl.DataFrame:
         "deadline_utc",
         *CROWD_CURRENT,
         "crowd_net_transfer_share",
+        "crowd_ownership",
         *[pl.col(c).shift(1).over("player_code").alias(f"{c}_prev") for c in CROWD_CURRENT],
     )
 

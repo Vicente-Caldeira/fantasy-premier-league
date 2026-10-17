@@ -13,7 +13,7 @@ being predicted (defensive contributions only exist from 2025-26), and summed ov
 player's fixtures in the gameweek.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import numpy as np
 import polars as pl
@@ -22,7 +22,13 @@ from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostin
 
 from fpl_core import scoring
 from fpl_models import simulator
-from fpl_models.player_features import FEATURES, POSITIONS, feature_matrix, latest_player_state
+from fpl_models.player_features import (
+    CROWD_ALL,
+    FEATURES,
+    POSITIONS,
+    feature_matrix,
+    latest_player_state,
+)
 
 DEFCON_FROM_SEASON = "2025-26"
 MAX_COUNT = 20
@@ -373,6 +379,28 @@ def availability(rows: pl.DataFrame, next_gameweek: int) -> pl.Series:
     )
 
 
+def with_live_crowd(rows: pl.DataFrame, squads: pl.DataFrame, next_gameweek: int) -> pl.DataFrame:
+    """Crowd signal for the open transfer window, from FPL's live counters.
+
+    `transfers_in_event` / `transfers_out_event` count the window now open (verified:
+    hours after the GW7 deadline they summed to 0.4M vs GW7's final 15.1M). A player's
+    share of all activity so far is window-invariant, so it matches training data.
+    Only the next gameweek has a window; later rows get nulls.
+    """
+    net = pl.col("transfers_in_event") - pl.col("transfers_out_event")
+    live = squads.select(
+        "player_code",
+        (pl.col("selected_by_percent").cast(pl.Float64) / 100).alias("crowd_ownership"),
+        (net / net.abs().sum().clip(lower_bound=1)).alias("crowd_net_transfer_share"),
+    )
+    columns = ("crowd_ownership", "crowd_net_transfer_share")
+    joined = rows.drop([c for c in columns if c in rows.columns]).join(
+        live, on="player_code", how="left", maintain_order="left"
+    )
+    is_next = pl.col("gameweek") == next_gameweek
+    return joined.with_columns(pl.when(is_next).then(pl.col(c)).alias(c) for c in columns)
+
+
 def predict_upcoming(
     features: pl.DataFrame,
     squads: pl.DataFrame,
@@ -391,16 +419,39 @@ def predict_upcoming(
         raise ValueError("no upcoming gameweeks to predict")
     config = config or ModelConfig()
     seasons = sorted(features["season"].unique().to_list())[-config.train_seasons :]
+    train = features.filter(pl.col("season").is_in(seasons))
     defcon_train = features.filter(
         pl.col("defcon_hit").is_not_null() & (pl.col("position") != "GKP")
     )
-    fitted = fit_components(features.filter(pl.col("season").is_in(seasons)), defcon_train, config)
-
+    fitted = fit_components(train, defcon_train, config)
     rows = upcoming_fixture_rows(squads, fixtures, gameweeks).join(
         latest_player_state(features), on="player_code", how="left"
     )
+    rows = with_live_crowd(rows, squads, next_gameweek=gameweeks[0])
+
+    crowd = [c for c in config.features if c in CROWD_ALL]
+    if crowd and len(gameweeks) > 1:
+        # The crowd signal exists only for the next deadline's open transfer window.
+        # Later gameweeks use a planning model trained without it.
+        no_crowd = replace(config, features=tuple(c for c in config.features if c not in crowd))
+        planning = fit_components(train, defcon_train, no_crowd)
+        order = rows.with_row_index("_row")
+        is_next = pl.col("gameweek") == gameweeks[0]
+        nxt, later = order.filter(is_next), order.filter(~is_next)
+        events = (
+            pl.concat(
+                [
+                    fitted.components(nxt).with_columns(nxt["_row"]),
+                    planning.components(later).with_columns(later["_row"]),
+                ]
+            )
+            .sort("_row")
+            .drop("_row")
+        )
+    else:
+        events = fitted.components(rows)
     factor = availability(rows, gameweeks[0])
-    events = fitted.components(rows).with_columns(pl.col(EVENT_COLUMNS) * factor)
+    events = events.with_columns(pl.col(EVENT_COLUMNS) * factor)
     if config.reconcile and fitted.team_rates:
         # After availability: an absent player's share of team goals moves to teammates.
         events = reconcile(rows, events, fitted.team_rates)
