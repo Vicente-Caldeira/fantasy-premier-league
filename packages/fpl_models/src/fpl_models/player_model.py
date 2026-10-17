@@ -92,9 +92,10 @@ class ModelConfig:
     recency_half_life_days: float | None = None
     train_seasons: int = 4
     features: tuple[str, ...] = FEATURES
-    # Train goals/assists on xG/xA where FPL has them (2022-23+): the same mean, far
-    # less noise than whether a 0.3 xG chance happened to go in.
-    denoise_targets: bool = False
+    # Train goals/assists on a blend of actual and expected (xG/xA, where FPL has them,
+    # 2022-23+): 1.0 = expected only (least noise), 0.0 = actual only. Pure xG
+    # under-rewards finishers who consistently beat it, so a blend may be best.
+    denoise_weight: float = 0.0
     # Rescale players' expected goals/assists so each team's add up to its expected
     # goals (live GW8: player sums ranged from 57% to 126% of team lambda).
     reconcile: bool = False
@@ -182,8 +183,9 @@ def fit_components(
     for target in COUNT_TARGETS:
         rows = train.filter(pl.col("position") == "GKP") if target == "saves" else train
         label = rows[target].cast(pl.Float64)
-        if config.denoise_targets and target in denoised:
-            label = rows[denoised[target]].cast(pl.Float64).fill_null(label)
+        if config.denoise_weight and target in denoised:
+            expected = rows[denoised[target]].cast(pl.Float64).fill_null(label)
+            label = config.denoise_weight * expected + (1 - config.denoise_weight) * label
         counts[target] = fit(Masked(_regressor(config)), rows, label.to_numpy())
     defcon = None
     if defcon_train.height:

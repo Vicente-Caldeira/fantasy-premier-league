@@ -47,7 +47,7 @@ EXPERIMENTS: dict[str, player_model.ModelConfig] = {
     "schedule": replace(BASE, features=BASE.features + player_features.SCHEDULE_FEATURES),
     # Not "opta": Opta detail starts in 2024-25, so it is empty on the tuning seasons.
     # Evaluating it needs a different split (see docs/model-experiments.md).
-    "denoise_targets": replace(BASE, denoise_targets=True),
+    "denoise_targets": replace(BASE, denoise_weight=1.0),
     "reconcile": replace(BASE, reconcile=True),
     "crowd_share": replace(BASE, features=BASE.features + player_features.CROWD_SHARE),
     # Combination of round 1's significant settings (each improved MAE, CI below 0).
@@ -76,15 +76,19 @@ TUNED = replace(
     learning_rate=0.03, max_iter=400,
 )  # fmt: skip
 ALL_IN = replace(
-    TUNED, denoise_targets=True, reconcile=True,
+    TUNED, denoise_weight=1.0, reconcile=True,
     features=BASE.features + player_features.CROWD_SHARE + player_features.SCHEDULE_FEATURES,
 )  # fmt: skip
 EXPERIMENTS |= {
     "all_in": ALL_IN,
-    "all_no_denoise": replace(ALL_IN, denoise_targets=False),
+    "all_no_denoise": replace(ALL_IN, denoise_weight=0.0),
     "all_no_reconcile": replace(ALL_IN, reconcile=False),
     "all_no_schedule": replace(ALL_IN, features=BASE.features + player_features.CROWD_SHARE),
     "all_no_crowd": replace(ALL_IN, features=BASE.features + player_features.SCHEDULE_FEATURES),
+    # Round 4: no reconciliation (it hurt in combination); blend of goals and xG targets.
+    "r4_xg_1": replace(ALL_IN, reconcile=False, denoise_weight=1.0),
+    "r4_xg_half": replace(ALL_IN, reconcile=False, denoise_weight=0.5),
+    "r4_xg_0": replace(ALL_IN, reconcile=False, denoise_weight=0.0),
     "all_untuned": replace(
         ALL_IN,
         recency_half_life_days=None,

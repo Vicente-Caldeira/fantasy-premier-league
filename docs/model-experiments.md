@@ -35,6 +35,38 @@ Tuning seasons 2021-22 + 2022-23 (76 gameweeks). Each row is the change against 
 - **Hyperparameters give small but real gains** (≤ 0.6% MAE each). They're combined in round 2 as `tuned`.
 - **Captain points are very noisy over two seasons.** No experiment moved them significantly.
 
+## Round 2: new inputs and targets
+
+| Experiment | Δ regulars MAE (95% CI) | Δ top-11 pts (95% CI) | Verdict |
+|---|---|---|---|
+| tuned + crowd_share | −0.034 (−0.040, −0.027) | +1.8 (−0.7, +4.3) | Best accuracy |
+| denoise_targets (train on xG/xA) | −0.032 (−0.045, −0.021) | −2.0 (−4.8, +0.5) | Big MAE gain, decisions possibly worse |
+| crowd_current | −0.027 (−0.037, −0.018) | +3.4 (+0.9, +5.7) | Real, skew-prone live |
+| **crowd_share** (net transfers ÷ all activity) | **−0.022 (−0.030, −0.015)** | **+3.4 (+1.1, +5.8)** | **Keeps almost all the value; window-invariant, safe live** |
+| tuned (round 1's significant settings) | −0.012 (−0.017, −0.008) | n.s. | Real, small |
+| reconcile (player goals add up to team λ) | −0.009 (−0.012, −0.006) | n.s. | Real, small alone |
+| schedule (rest days, 14-day congestion) | −0.005 (−0.009, −0.002) | n.s. | Real, small |
+
+Live check of the crowd counters: a few hours after the GW7 deadline, FPL's `transfers_in_event` / `transfers_out_event` summed to 0.4M vs GW7's final 15.1M (correlation 0.79). They count the **open** window, so the share feature is available live for the next gameweek only. Later gameweeks use a planning model trained without crowd features.
+
+## Round 3: combination and ablation
+
+`all_in` = tuned + crowd_share + schedule + xG targets + reconcile.
+
+| Variant | Δ MAE vs baseline | Δ MAE vs all_in when removed (95% CI) | Δ top-11 vs all_in |
+|---|---|---|---|
+| all_in | −0.042 (−0.051, −0.034) | | |
+| without reconcile | **−0.062 (−0.075, −0.050)** | **−0.020 (−0.030, −0.011): removing helps** | +0.4 |
+| without crowd | −0.023 | +0.020 (+0.013, +0.025): essential | **−2.6 (−4.6, −0.5)** |
+| without xG targets | −0.035 | +0.008 (+0.002, +0.014): helps MAE | **+2.3 (−0.1, +4.9): costs decisions** |
+| without schedule | −0.040 | +0.003 (0.000, +0.006): marginal | −0.8 |
+| untuned | −0.040 | +0.002 (n.s.) | −0.4 |
+
+**Takeaways**
+- **Reconciliation conflicts with the other changes:** drop it from the point model. The simulator is coherent by construction (team goals = the sum of simulated player goals), so team consistency doesn't depend on it.
+- **The crowd signal is the single most important addition**, for accuracy and for decisions.
+- **Pure xG targets help MAE but hurt the top-11.** Plausibly they under-reward elite finishers who beat their xG season after season. Round 4 tests a 50/50 blend.
+
 ## Backlog (ranked by expected value)
 
 | Idea | Why it might help | Notes |
