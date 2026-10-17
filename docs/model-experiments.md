@@ -15,9 +15,25 @@ uv run python -m fpl_models.experiments [--only NAME ...]
 
 ## Round 1: one change at a time
 
-Results below; baseline = the current champion.
+Tuning seasons 2021-22 + 2022-23 (76 gameweeks). Each row is the change against the baseline (the current champion: regulars MAE 1.8700, captain 7.24, top-11 62.01), as the mean of a paired bootstrap over gameweeks with its 95% interval. For MAE, negative is better.
 
-_Pending._
+| Experiment | Δ regulars MAE (95% CI) | Δ captain pts (95% CI) | Δ top-11 pts (95% CI) | Verdict |
+|---|---|---|---|---|
+| **crowd_current** (this GW's pre-deadline transfers, ownership) | **−0.027 (−0.037, −0.018)** | +0.40 (−0.95, +1.73) | **+3.36 (+0.92, +5.72)** | **Large, real.** Train/serve skew: complete window in training, partial live |
+| recency_180d (training-row half-life) | −0.011 (−0.016, −0.005) | −0.63 (−2.15, +0.89) | −1.98 (−4.24, +0.25) | Real MAE gain; decisions unclear |
+| l2_1 | −0.008 (−0.011, −0.005) | +1.05 (−0.05, +2.16) | +0.74 (−1.23, +2.73) | Real, small |
+| recency_365d | −0.006 (−0.011, −0.001) | +0.22 | −1.25 | Real, small |
+| min_leaf_100 | −0.005 (−0.009, −0.002) | +0.37 | +0.01 | Real, small |
+| leaves_63 | −0.004 (−0.008, −0.001) | +0.47 | −1.38 | Real, small |
+| lr03_iter400 | −0.004 (−0.006, −0.002) | +0.28 | −0.90 | Real, small |
+| recency_730d, seasons_6, seasons_2, leaves_15 | CI includes 0 | | leaves_15: +2.15 (+0.15, +4.16) | No MAE effect |
+| crowd_lagged (previous GW's transfers) | −0.001 (−0.005, +0.002) | | | **No effect:** only *current* news matters |
+| multi_half_life (4 and 16 GW rates too) | −0.000 | | | No effect |
+
+**Takeaways**
+- **Team news dominates.** The current gameweek's transfer activity improves MAE 2.5× more than any hyperparameter, and it's the only change that significantly improves a decision metric.
+- **Hyperparameters give small but real gains** (≤ 0.6% MAE each). They're combined in round 2 as `tuned`.
+- **Captain points are very noisy over two seasons.** No experiment moved them significantly.
 
 ## Backlog (ranked by expected value)
 

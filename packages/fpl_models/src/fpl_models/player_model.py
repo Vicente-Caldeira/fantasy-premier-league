@@ -21,6 +21,7 @@ from scipy.stats import poisson
 from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 
 from fpl_core import scoring
+from fpl_models import simulator
 from fpl_models.player_features import FEATURES, POSITIONS, feature_matrix, latest_player_state
 
 DEFCON_FROM_SEASON = "2025-26"
@@ -407,6 +408,8 @@ def predict_upcoming(
     per_fixture = pl.concat([rows, events, factor.to_frame()], how="horizontal").with_columns(
         points
     )
+    settings = simulator.SimulationSettings(defcon_on=rows["season"][0] >= DEFCON_FROM_SEASON)
+    distributions = simulator.per_player_gameweek(simulator.simulate(rows, events, settings), rows)
     return (
         per_fixture.group_by("player_code", "web_name", "position", "team_key", "price", "gameweek")
         .agg(
@@ -420,5 +423,6 @@ def predict_upcoming(
             (pl.col("p_60") * pl.col("p_clean_sheet")).mean().alias("p_clean_sheet"),
             pl.col("availability").min(),
         )
+        .join(distributions.drop("sim_mean"), on=["player_code", "gameweek"], how="left")
         .sort("gameweek", "expected_points", descending=[False, True])
     )

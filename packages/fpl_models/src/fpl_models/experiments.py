@@ -49,6 +49,25 @@ EXPERIMENTS: dict[str, player_model.ModelConfig] = {
     # Evaluating it needs a different split (see docs/model-experiments.md).
     "denoise_targets": replace(BASE, denoise_targets=True),
     "reconcile": replace(BASE, reconcile=True),
+    "crowd_share": replace(BASE, features=BASE.features + player_features.CROWD_SHARE),
+    # Combination of round 1's significant settings (each improved MAE, CI below 0).
+    "tuned": replace(
+        BASE,
+        recency_half_life_days=180,
+        l2_regularization=1.0,
+        min_samples_leaf=100,
+        learning_rate=0.03,
+        max_iter=400,
+    ),
+    "tuned_crowd_share": replace(
+        BASE,
+        recency_half_life_days=180,
+        l2_regularization=1.0,
+        min_samples_leaf=100,
+        learning_rate=0.03,
+        max_iter=400,
+        features=BASE.features + player_features.CROWD_SHARE,
+    ),
 }
 
 
