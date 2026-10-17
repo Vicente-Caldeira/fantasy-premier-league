@@ -9,11 +9,12 @@ import dagster as dg
 import duckdb
 import polars as pl
 
-from fpl_models import player_features, player_model, team_strength
+from fpl_models import optimizer, player_features, player_model, team_strength
 from fpl_models.backtest import Predictor
 from fpl_models.baselines import BASELINES
-from fpl_models.data import load_player_matches, player_gameweeks
+from fpl_models.data import load_player_matches, next_gameweeks, player_gameweeks
 from fpl_models.leaderboard import EVALUATION_SEASONS, PRIMARY_METRIC, leaderboard, to_markdown
+from fpl_models.plan import describe, latest_expected_points
 from fpl_pipelines.lake import Lake
 
 
@@ -27,6 +28,8 @@ def _write_parquet(lake: Lake, path: str, frame: pl.DataFrame) -> str:
     lake.write_bytes(path, buffer.getvalue())
     return lake.uri(path)
 
+
+HORIZON = 5  # gameweeks ahead for live predictions and plans
 
 TEAM_SUMMARY_COLUMNS = (
     "model",
@@ -140,11 +143,16 @@ def fixture_lambdas(lake: Lake) -> dg.MaterializeResult[None]:
 
 @dg.asset(
     key=["gold", "player_points", "expected_points"],
-    deps=[dg.AssetKey("fct_player_matches"), dg.AssetKey("current_squads"), fixture_lambdas],
+    deps=[
+        dg.AssetKey("fct_player_matches"),
+        dg.AssetKey("current_squads"),
+        dg.AssetKey("dim_gameweeks"),
+        fixture_lambdas,
+    ],
     group_name="models",
 )
 def expected_points(lake: Lake) -> dg.MaterializeResult[None]:
-    """Expected points per player for each of the next five gameweeks.
+    """Expected points per player for each of the next five gameweeks (by FPL deadline).
 
     Component models trained on all history, applied to each squad player's latest
     state and the current team-strength fixture expectations, adjusted for FPL's
@@ -155,10 +163,12 @@ def expected_points(lake: Lake) -> dg.MaterializeResult[None]:
     features = player_features.build_features(
         player_features.load_fixture_rows(warehouse), player_features.match_lambdas(matches)
     )
-    fixtures = team_strength.fixture_expectations(matches, as_of=datetime.now(UTC))
+    now = datetime.now(UTC)
+    fixtures = team_strength.fixture_expectations(matches, as_of=now)
+    gameweeks = next_gameweeks(warehouse, now, HORIZON)
     with duckdb.connect(str(warehouse), read_only=True) as connection:
         squads = connection.sql("select * from current_squads").pl()
-    predictions = player_model.predict_upcoming(features, squads, fixtures, horizon=5)
+    predictions = player_model.predict_upcoming(features, squads, fixtures, gameweeks)
 
     path = f"gold/player_points/expected_points/as_of={_stamp()}/data.parquet"
     uri = _write_parquet(lake, path, predictions)
@@ -170,5 +180,51 @@ def expected_points(lake: Lake) -> dg.MaterializeResult[None]:
             "players": predictions["player_code"].n_unique(),
             "gameweeks": ", ".join(str(g) for g in predictions["gameweek"].unique().sort()),
             "top_next_gameweek": dg.MetadataValue.md(to_markdown(top, top.columns)),
+        }
+    )
+
+
+@dg.asset(
+    key=["gold", "plans", "wildcard"],
+    deps=[expected_points, dg.AssetKey("current_squads")],
+    group_name="models",
+)
+def wildcard_plan(lake: Lake) -> dg.MaterializeResult[None]:
+    """The best squad from scratch and its lineups/captains/transfers over the horizon.
+
+    Solved as a mixed-integer program on the latest expected points; every plan is
+    checked against FPL's rules independently of the solver.
+    """
+    warehouse = _warehouse()
+    gameweeks = next_gameweeks(warehouse, datetime.now(UTC), HORIZON)
+    with duckdb.connect(str(warehouse), read_only=True) as connection:
+        squads = connection.sql("select * from current_squads").pl()
+    xp = latest_expected_points(os.getenv("FPL_LAKE_URL", "data"), gameweeks)
+    plan = optimizer.optimise(
+        squads.select("player_code", "position", "team_key", "price"),
+        xp.select("player_code", "gameweek", "expected_points"),
+    )
+    rows = [
+        {
+            "gameweek": gw.gameweek,
+            "player_code": p,
+            "in_lineup": p in gw.lineup,
+            "is_captain": p == gw.captain,
+            "is_vice_captain": p == gw.vice_captain,
+            "bought": p in gw.transfers_in,
+            "hits": gw.hits,
+            "expected_points": gw.expected_points,
+        }
+        for gw in plan.gameweeks
+        for p in gw.squad
+    ]
+    path = f"gold/plans/wildcard/as_of={_stamp()}/data.parquet"
+    uri = _write_parquet(lake, path, pl.DataFrame(rows))
+    return dg.MaterializeResult(
+        metadata={
+            "uri": uri,
+            "status": plan.status,
+            "expected_points": round(plan.total_expected_points, 1),
+            "plan": dg.MetadataValue.md(f"```\n{describe(plan, squads, None)}\n```"),
         }
     )

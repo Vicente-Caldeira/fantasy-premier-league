@@ -6,7 +6,7 @@ fixture he has in it (double and triple gameweeks included). Each gameweek's
 from matches that kicked off before it.
 """
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import duckdb
@@ -44,6 +44,17 @@ def load_player_matches(warehouse: Path = DEFAULT_WAREHOUSE) -> pl.DataFrame:
             from fct_player_matches
             """
         ).pl()
+
+
+def next_gameweeks(warehouse: Path, as_of: datetime, horizon: int) -> list[int]:
+    """The next `horizon` current-season gameweeks whose FPL deadline is after `as_of`."""
+    with duckdb.connect(str(warehouse), read_only=True) as connection:
+        connection.execute("set TimeZone = 'UTC'")
+        rows = connection.execute(
+            "select gameweek from dim_gameweeks where deadline_utc > ? order by gameweek limit ?",
+            [as_of, horizon],
+        ).fetchall()
+    return [int(gw) for (gw,) in rows]
 
 
 def player_gameweeks(matches: pl.DataFrame) -> pl.DataFrame:

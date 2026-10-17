@@ -285,17 +285,18 @@ def predict_upcoming(
     features: pl.DataFrame,
     squads: pl.DataFrame,
     fixtures: pl.DataFrame,
+    gameweeks: list[int],
     *,
-    horizon: int = 5,
     train_seasons: int = 4,
 ) -> pl.DataFrame:
-    """Expected points per player for each of the next `horizon` gameweeks.
+    """Expected points per player for each of `gameweeks` (deadlines still to come).
 
     `features` are all played fixture rows (from `build_features`): the training data,
     and the history each player's latest state is computed from. Trains on the latest
     `train_seasons` seasons (DefCon on all labelled history).
     """
-    gameweeks = sorted(fixtures["gameweek"].drop_nulls().unique().to_list())[:horizon]
+    if not gameweeks:
+        raise ValueError("no upcoming gameweeks to predict")
     seasons = sorted(features["season"].unique().to_list())[-train_seasons:]
     defcon_train = features.filter(
         pl.col("defcon_hit").is_not_null() & (pl.col("position") != "GKP")

@@ -87,3 +87,11 @@ models:
       - name: status
         data_tests:
           - accepted_values: {arguments: {values: [a, d, i, s, u, n]}}
+
+  - name: dim_gameweeks
+    description: Current-season gameweeks with FPL's official deadlines (latest snapshot).
+    columns:
+      - name: gameweek
+        data_tests: [unique, not_null]
+      - name: deadline_utc
+        data_tests: [not_null]
