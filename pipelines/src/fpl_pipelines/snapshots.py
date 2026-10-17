@@ -64,3 +64,24 @@ def take_snapshot(
             "reused": False,
         }
     )
+
+
+def latest_version(lake: Lake, prefix: str) -> str | None:
+    versions = lake.list(prefix)
+    return versions[-1] if versions else None
+
+
+def store_version(
+    lake: Lake, prefix: str, data: bytes, extension: str
+) -> dg.MaterializeResult[None]:
+    """For files re-published in place: keep a new immutable version only on change."""
+    latest = latest_version(lake, prefix)
+    if latest is not None and lake.read_bytes(latest) == data:
+        return dg.MaterializeResult(metadata={"uri": lake.uri(latest), "changed": False})
+    # Microseconds keep versions distinct and lexicographically ordered by fetch time.
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
+    path = f"{prefix}/fetched_at={stamp}.{extension}"
+    lake.write_bytes(path, data)
+    return dg.MaterializeResult(
+        metadata={"uri": lake.uri(path), "bytes": len(data), "changed": True}
+    )
