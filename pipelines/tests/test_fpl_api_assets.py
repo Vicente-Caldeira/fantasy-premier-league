@@ -9,8 +9,9 @@ import dagster as dg
 import polars as pl
 import pytest
 
+from fpl_pipelines import snapshots
 from fpl_pipelines.assets import fpl_api
-from fpl_pipelines.definitions import defs, fpl_snapshot_job
+from fpl_pipelines.definitions import daily_snapshot_job, defs
 from fpl_pipelines.lake import Lake, PartitionedParquetIOManager
 from fpl_pipelines.resources import FplApiResource
 
@@ -150,16 +151,16 @@ def test_rerun_reuses_existing_snapshot_without_calling_api(lake):
 
 def test_snapshot_guard_rejects_any_date_but_today():
     with pytest.raises(dg.Failure, match="can only be taken on that date"):
-        fpl_api._assert_live("2026-01-01")
-    fpl_api._assert_live(TODAY)
+        snapshots.assert_live("2026-01-01")
+    snapshots.assert_live(TODAY)
 
 
 def test_backfilling_a_past_snapshot_is_refused(lake):
-    result = run(lake, partition_key=fpl_api.FIRST_SNAPSHOT_DATE)
-    if fpl_api.FIRST_SNAPSHOT_DATE == TODAY:
+    result = run(lake, partition_key=snapshots.FIRST_SNAPSHOT_DATE)
+    if snapshots.FIRST_SNAPSHOT_DATE == TODAY:
         pytest.skip("first snapshot date is today")
     assert not result.success
-    assert not lake.exists(fpl_api.bronze_path("bootstrap_static", fpl_api.FIRST_SNAPSHOT_DATE))
+    assert not lake.exists(fpl_api.bronze_path("bootstrap_static", snapshots.FIRST_SNAPSHOT_DATE))
 
 
 def test_blocking_check_stops_bad_data_reaching_downstream(lake, monkeypatch):
@@ -172,9 +173,17 @@ def test_blocking_check_stops_bad_data_reaching_downstream(lake, monkeypatch):
 
 
 def test_schedule_targets_todays_partition():
-    schedule = defs.get_schedule_def("fpl_snapshot_schedule")
+    schedule = defs.get_schedule_def("daily_snapshot_schedule")
     tick = datetime.now(UTC).replace(hour=6, minute=0, second=0, microsecond=0)
     context = dg.build_schedule_context(scheduled_execution_time=tick)
     run_request = next(iter(schedule.evaluate_tick(context).run_requests or []))
     assert run_request.partition_key == tick.date().isoformat()
-    assert schedule.job_name == fpl_snapshot_job.name
+    assert schedule.job_name == daily_snapshot_job.name
+
+
+def test_every_check_is_partitioned():
+    # Unpartitioned checks load every partition of their asset and crash once a second
+    # snapshot exists, so each check must share its asset's partitioning.
+    graph = defs.resolve_asset_graph()
+    unpartitioned = [k.name for k in graph.asset_check_keys if graph.get(k).partitions_def is None]
+    assert unpartitioned == []

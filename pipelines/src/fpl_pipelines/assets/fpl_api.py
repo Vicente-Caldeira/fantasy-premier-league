@@ -1,13 +1,10 @@
 """FPL API ingestion: daily raw snapshots (bronze) and typed tables (silver).
 
 The API only exposes *current* state: prices, ownership, injury news and form have no
-history endpoint. Each daily partition is therefore a snapshot that can only be taken on
-its own date; materialising a past partition fails instead of storing today's data under
-yesterday's label.
+history endpoint, so each daily partition is a snapshot (see `fpl_pipelines.snapshots`).
 """
 
 from collections.abc import Callable, Sequence
-from datetime import UTC, datetime
 from typing import Any
 
 import dagster as dg
@@ -16,13 +13,9 @@ import polars as pl
 from fpl_core.fpl_api import BootstrapStatic, ElementSummary, Fixture
 from fpl_core.fpl_api.schemas import Contract
 from fpl_core.scoring import MatchStats, Position, points
-from fpl_pipelines.lake import Lake
+from fpl_pipelines.lake import Lake, encode_json_gz
 from fpl_pipelines.resources import FplApiResource
-
-FIRST_SNAPSHOT_DATE = "2026-10-17"
-snapshot_partitions = dg.DailyPartitionsDefinition(
-    start_date=FIRST_SNAPSHOT_DATE, timezone="UTC", end_offset=1
-)
+from fpl_pipelines.snapshots import daily_snapshots, take_snapshot
 
 BRONZE = ["bronze", "fpl_api"]
 SILVER = ["silver", "fpl"]
@@ -32,40 +25,17 @@ def bronze_path(dataset: str, snapshot_date: str) -> str:
     return f"bronze/fpl_api/{dataset}/snapshot_date={snapshot_date}/{dataset}.json.gz"
 
 
-def _assert_live(snapshot_date: str) -> None:
-    today = datetime.now(UTC).date().isoformat()
-    if snapshot_date != today:
-        raise dg.Failure(
-            f"Snapshot {snapshot_date} can only be taken on that date (today is {today}): "
-            "the FPL API has no history, so a backfill would mislabel current data."
-        )
-
-
 def _snapshot(
     context: dg.AssetExecutionContext,
     lake: Lake,
     dataset: str,
-    fetch: Any,  # noqa: ANN401
+    fetch: Callable[[], Any],
 ) -> dg.MaterializeResult[None]:
     path = bronze_path(dataset, context.partition_key)
-    if lake.exists(path):
-        # Bronze is immutable: re-running a partition reuses the snapshot already taken.
-        context.log.info("Snapshot %s already exists, reusing it", path)
-        return dg.MaterializeResult(metadata={"uri": lake.uri(path), "reused": True})
-    _assert_live(context.partition_key)
-    payload = fetch()
-    size = lake.write_json_gz(path, payload)
-    return dg.MaterializeResult(
-        metadata={
-            "uri": lake.uri(path),
-            "bytes": size,
-            "fetched_at": datetime.now(UTC).isoformat(),
-            "reused": False,
-        }
-    )
+    return take_snapshot(context, lake, path, lambda: encode_json_gz(fetch()))
 
 
-@dg.asset(key_prefix=BRONZE, partitions_def=snapshot_partitions, group_name="fpl_bronze")
+@dg.asset(key_prefix=BRONZE, partitions_def=daily_snapshots, group_name="fpl_bronze")
 def bootstrap_static(
     context: dg.AssetExecutionContext, fpl_api: FplApiResource, lake: Lake
 ) -> dg.MaterializeResult[None]:
@@ -74,7 +44,7 @@ def bootstrap_static(
         return _snapshot(context, lake, "bootstrap_static", client.bootstrap_static)
 
 
-@dg.asset(key_prefix=BRONZE, partitions_def=snapshot_partitions, group_name="fpl_bronze")
+@dg.asset(key_prefix=BRONZE, partitions_def=daily_snapshots, group_name="fpl_bronze")
 def fixtures(
     context: dg.AssetExecutionContext, fpl_api: FplApiResource, lake: Lake
 ) -> dg.MaterializeResult[None]:
@@ -85,7 +55,7 @@ def fixtures(
 
 @dg.asset(
     key_prefix=BRONZE,
-    partitions_def=snapshot_partitions,
+    partitions_def=daily_snapshots,
     group_name="fpl_bronze",
     deps=[bootstrap_static],
 )
@@ -118,7 +88,7 @@ def silver_asset(
 ) -> Callable[[Callable[..., pl.DataFrame]], dg.AssetsDefinition]:
     return dg.asset(
         key_prefix=SILVER,
-        partitions_def=snapshot_partitions,
+        partitions_def=daily_snapshots,
         group_name="fpl_silver",
         io_manager_key="parquet_io_manager",
         deps=deps,
@@ -165,18 +135,23 @@ def _check(passed: bool, **metadata: int) -> dg.AssetCheckResult:
     return dg.AssetCheckResult(passed=passed, metadata=metadata)
 
 
-@dg.asset_check(asset=teams, blocking=True)
+@dg.asset_check(asset=teams, blocking=True, partitions_def=daily_snapshots)
 def twenty_unique_teams(teams: pl.DataFrame) -> dg.AssetCheckResult:
     return _check(teams.height == 20 and teams["id"].n_unique() == 20, rows=teams.height)
 
 
-@dg.asset_check(asset=gameweeks, blocking=True)
+@dg.asset_check(asset=gameweeks, blocking=True, partitions_def=daily_snapshots)
 def thirty_eight_gameweeks(gameweeks: pl.DataFrame) -> dg.AssetCheckResult:
     ids = sorted(gameweeks["id"].to_list())
     return _check(ids == list(range(1, 39)), rows=gameweeks.height)
 
 
-@dg.asset_check(asset=players, blocking=True, additional_ins={"teams": dg.AssetIn(key=teams.key)})
+@dg.asset_check(
+    asset=players,
+    blocking=True,
+    partitions_def=daily_snapshots,
+    additional_ins={"teams": dg.AssetIn(key=teams.key)},
+)
 def players_are_valid(players: pl.DataFrame, teams: pl.DataFrame) -> dg.AssetCheckResult:
     duplicate_ids = players.height - players["id"].n_unique()
     unknown_teams = players.filter(~pl.col("team").is_in(teams["id"].implode())).height
@@ -192,14 +167,14 @@ def players_are_valid(players: pl.DataFrame, teams: pl.DataFrame) -> dg.AssetChe
     )
 
 
-@dg.asset_check(asset=fixtures_table, blocking=True)
+@dg.asset_check(asset=fixtures_table, blocking=True, partitions_def=daily_snapshots)
 def full_season_of_fixtures(fixtures_table: pl.DataFrame) -> dg.AssetCheckResult:
     # Each pair of teams meets exactly twice, once at each home ground.
     pairs = fixtures_table.select("team_h", "team_a").unique().height
     return _check(fixtures_table.height == 380 and pairs == 380, rows=fixtures_table.height)
 
 
-@dg.asset_check(asset=player_matches, blocking=True)
+@dg.asset_check(asset=player_matches, blocking=True, partitions_def=daily_snapshots)
 def one_row_per_player_fixture(player_matches: pl.DataFrame) -> dg.AssetCheckResult:
     duplicates = player_matches.height - player_matches.select("element", "fixture").n_unique()
     return _check(duplicates == 0, rows=player_matches.height, duplicates=duplicates)
@@ -207,6 +182,7 @@ def one_row_per_player_fixture(player_matches: pl.DataFrame) -> dg.AssetCheckRes
 
 @dg.asset_check(
     asset=player_matches,
+    partitions_def=daily_snapshots,
     additional_ins={
         "players": dg.AssetIn(key=players.key),
         "fixtures_table": dg.AssetIn(key=fixtures_table.key),
