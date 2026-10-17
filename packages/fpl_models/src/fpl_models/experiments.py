@@ -19,6 +19,7 @@ import polars as pl
 from fpl_models import player_features, player_model, team_strength
 from fpl_models.backtest import run_backtest
 from fpl_models.data import DEFAULT_WAREHOUSE, load_player_matches, player_gameweeks
+from fpl_models.leaderboard import EVALUATION_SEASONS
 from fpl_models.metrics import TOP_N, evaluate, regulars
 
 TUNING_SEASONS = ("2021-22", "2022-23")
@@ -148,7 +149,11 @@ def compare(candidate: pl.DataFrame, baseline: pl.DataFrame, seed: int = 0) -> d
     return out
 
 
-def run(names: list[str], warehouse: Path) -> pl.DataFrame:
+def run(names: list[str], warehouse: Path, *, held_out: bool = False) -> pl.DataFrame:
+    """Backtest each config. `held_out` scores EVALUATION_SEASONS: run it once, for the
+    final candidate only, after every choice has been made on the tuning seasons."""
+    seasons = EVALUATION_SEASONS if held_out else TUNING_SEASONS
+    results = RESULTS_DIR / "held_out" if held_out else RESULTS_DIR
     matches = team_strength.load_matches(warehouse)
     features = player_features.build_features(
         player_features.load_fixture_rows(warehouse),
@@ -156,18 +161,18 @@ def run(names: list[str], warehouse: Path) -> pl.DataFrame:
         player_features.schedule_features(matches),
     )
     gameweeks = player_gameweeks(load_player_matches(warehouse))
-    RESULTS_DIR.mkdir(parents=True, exist_ok=True)
+    results.mkdir(parents=True, exist_ok=True)
     rows = []
     for name in names:
         config = EXPERIMENTS[name]
         model = player_model.ComponentModel(features, config=config, name=name)
-        predictions = run_backtest(model, gameweeks, TUNING_SEASONS).predictions
-        per_gameweek(predictions, gameweeks).write_parquet(RESULTS_DIR / f"{name}.parquet")
+        predictions = run_backtest(model, gameweeks, seasons).predictions
+        per_gameweek(predictions, gameweeks).write_parquet(results / f"{name}.parquet")
         result = {"experiment": name, **evaluate(predictions, gameweeks)}
         if os.getenv("MLFLOW_TRACKING_URI"):
             import mlflow  # noqa: PLC0415 - optional, only when tracking
 
-            mlflow.set_experiment("player_model_tuning")
+            mlflow.set_experiment("player_model_held_out" if held_out else "player_model_tuning")
             with mlflow.start_run(run_name=name):
                 params = {k: v for k, v in asdict(config).items() if k != "features"}
                 mlflow.log_params({**params, "n_features": len(config.features)})
@@ -177,11 +182,14 @@ def run(names: list[str], warehouse: Path) -> pl.DataFrame:
     return pl.DataFrame(rows)
 
 
-def significance(names: list[str], baseline: str = "baseline") -> pl.DataFrame:
+def significance(
+    names: list[str], baseline: str = "baseline", *, held_out: bool = False
+) -> pl.DataFrame:
     """Each experiment vs the baseline, from the saved per-gameweek results."""
-    base = pl.read_parquet(RESULTS_DIR / f"{baseline}.parquet")
+    results = RESULTS_DIR / "held_out" if held_out else RESULTS_DIR
+    base = pl.read_parquet(results / f"{baseline}.parquet")
     rows = [
-        {"experiment": n, **compare(pl.read_parquet(RESULTS_DIR / f"{n}.parquet"), base)}
+        {"experiment": n, **compare(pl.read_parquet(results / f"{n}.parquet"), base)}
         for n in names
         if n != baseline
     ]
@@ -193,11 +201,12 @@ def main() -> None:
     parser.add_argument("--only", nargs="*", default=list(EXPERIMENTS))
     parser.add_argument("--warehouse", type=Path, default=DEFAULT_WAREHOUSE)
     parser.add_argument("--compare-only", action="store_true", help="reuse saved results")
+    parser.add_argument("--held-out", action="store_true", help="final, one-off evaluation")
     args = parser.parse_args()
     if not args.compare_only:
-        run(args.only, args.warehouse)
+        run(args.only, args.warehouse, held_out=args.held_out)
     with pl.Config(tbl_cols=-1, tbl_width_chars=250, float_precision=4, tbl_rows=50):
-        print(significance(args.only))
+        print(significance(args.only, held_out=args.held_out))
 
 
 if __name__ == "__main__":
