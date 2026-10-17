@@ -67,7 +67,7 @@ def understat_refresh_schedule() -> dg.RunRequest:
 # Rebuild the marts, then re-run the backtests on them.
 warehouse_job = dg.define_asset_job(
     "warehouse_build",
-    selection=dg.AssetSelection.assets(warehouse.warehouse, models.backtest_leaderboard),
+    selection=dg.AssetSelection.assets(warehouse.warehouse) | dg.AssetSelection.groups("models"),
 )
 
 # 07:00 UTC: after the daily snapshot (06:00) and the current-season refreshes (06:30).
