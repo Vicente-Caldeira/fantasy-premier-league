@@ -13,8 +13,10 @@ x-dagster: &dagster
     DAGSTER_HOME: /opt/dagster_home
     DAGSTER_POSTGRES_URL: postgresql://fpl:fpl@postgres:5432/dagster
     MLFLOW_TRACKING_URI: http://mlflow:5000
+    FPL_LAKE_URL: /data
   volumes:
     - ./pipelines/dagster_home:/opt/dagster_home:ro
+    - lake:/data
   depends_on:
     postgres: { condition: service_healthy }
 
@@ -77,5 +79,6 @@ services:
     depends_on: [api]
 
 volumes:
+  lake:
   pgdata:
   mlartifacts:
