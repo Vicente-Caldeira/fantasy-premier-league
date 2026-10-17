@@ -4,12 +4,13 @@ import os
 
 import dagster as dg
 
-from fpl_pipelines.assets import football_data, fpl_api, fpl_elo_insights
+from fpl_pipelines.assets import football_data, fpl_api, fpl_elo_insights, vaastav
+from fpl_pipelines.github_repo import GitHubResource
 from fpl_pipelines.lake import Lake, PartitionedParquetIOManager
 from fpl_pipelines.resources import FplApiResource
 from fpl_pipelines.snapshots import current_season
 
-ASSET_MODULES = [fpl_api, football_data, fpl_elo_insights]
+ASSET_MODULES = [fpl_api, football_data, fpl_elo_insights, vaastav]
 
 lake = Lake(base_url=os.getenv("FPL_LAKE_URL", "data"))
 
@@ -21,6 +22,7 @@ daily_snapshot_job = dg.define_asset_job(
         "football_data_bronze",
         "football_data_silver",
         "fpl_elo_insights_bronze",
+        "vaastav_bronze",
     )
     - dg.AssetSelection.assets(football_data.season_results, football_data.matches),
 )
@@ -33,6 +35,12 @@ season_refresh_job = dg.define_asset_job(
 
 elo_insights_refresh_job = dg.define_asset_job(
     "elo_insights_refresh", selection=dg.AssetSelection.groups("fpl_elo_insights_silver")
+)
+
+
+# Finished seasons don't change: backfill once, re-run only if upstream fixes data.
+vaastav_history_job = dg.define_asset_job(
+    "vaastav_history", selection=dg.AssetSelection.groups("vaastav_silver")
 )
 
 
@@ -51,7 +59,7 @@ def season_refresh_schedule() -> dg.RunRequest:
 defs = dg.Definitions(
     assets=dg.load_assets_from_modules(ASSET_MODULES),
     asset_checks=dg.load_asset_checks_from_modules(ASSET_MODULES),
-    jobs=[daily_snapshot_job, season_refresh_job, elo_insights_refresh_job],
+    jobs=[daily_snapshot_job, season_refresh_job, elo_insights_refresh_job, vaastav_history_job],
     schedules=[
         # 06:00 UTC: after overnight price changes, before most news breaks.
         dg.build_schedule_from_partitioned_job(daily_snapshot_job, hour_of_day=6, minute_of_hour=0),
@@ -61,7 +69,7 @@ defs = dg.Definitions(
     resources={
         "fpl_api": FplApiResource(),
         "football_data": football_data.FootballDataResource(),
-        "github": fpl_elo_insights.GitHubResource(),
+        "github": GitHubResource(),
         "lake": lake,
         "parquet_io_manager": PartitionedParquetIOManager(lake=lake),
     },
