@@ -9,6 +9,7 @@ from fpl_pipelines.assets import (
     football_data,
     fpl_api,
     fpl_elo_insights,
+    models,
     understat,
     vaastav,
     warehouse,
@@ -18,7 +19,7 @@ from fpl_pipelines.lake import Lake, PartitionedParquetIOManager
 from fpl_pipelines.resources import FplApiResource
 from fpl_pipelines.snapshots import current_season
 
-ASSET_MODULES = [fpl_api, football_data, fpl_elo_insights, vaastav, understat, warehouse]
+ASSET_MODULES = [fpl_api, football_data, fpl_elo_insights, vaastav, understat, warehouse, models]
 
 lake = Lake(base_url=os.getenv("FPL_LAKE_URL", "data"))
 
@@ -63,8 +64,10 @@ def understat_refresh_schedule() -> dg.RunRequest:
     return dg.RunRequest(partition_key=current_season())
 
 
+# Rebuild the marts, then re-run the backtests on them.
 warehouse_job = dg.define_asset_job(
-    "warehouse_build", selection=dg.AssetSelection.assets(warehouse.warehouse)
+    "warehouse_build",
+    selection=dg.AssetSelection.assets(warehouse.warehouse, models.backtest_leaderboard),
 )
 
 # 07:00 UTC: after the daily snapshot (06:00) and the current-season refreshes (06:30).

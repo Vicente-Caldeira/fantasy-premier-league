@@ -3,7 +3,12 @@ name = "fpl-models"
 version = "0.0.0"
 description = "Feature engineering, component models, backtesting and optimisation"
 requires-python = ">=3.12,<3.13"
-dependencies = ["fpl-core"]
+dependencies = [
+    "duckdb>=1.5",
+    "fpl-core",
+    "mlflow-skinny>=3.17",
+    "polars>=2.0",
+]
 
 [build-system]
 requires = ["hatchling"]
