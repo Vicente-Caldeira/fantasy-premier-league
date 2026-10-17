@@ -27,11 +27,23 @@ def test_using_transfers_and_taking_hits():
     assert ti.free_transfers(history, [], next_gameweek=5) == 2
 
 
-def test_wildcard_and_free_hit_keep_banked_transfers():
+def test_wildcard_and_free_hit_keep_banked_transfers_without_earning_one():
     history = [week(1, 0), week(2, 0), week(3, 15), week(4, 15), week(5, 0)]
     chips = [{"name": "wildcard", "event": 3}, {"name": "freehit", "event": 4}]
-    # GW2 -> 2, GW3 wildcard keeps them -> 3, GW4 free hit -> 4, GW5 bank -> 5.
-    assert ti.free_transfers(history, chips, next_gameweek=6) == 5
+    # GW2 bank -> 2; GW3 wildcard keeps 2 (no +1); GW4 free hit keeps 2; GW5 bank -> 3.
+    assert ti.free_transfers(history, chips, next_gameweek=6) == 3
+
+
+def test_replay_matches_a_real_managers_count():
+    # A real 2026-27 history: bench boost GW2, wildcard GW3, triple captain GW4.
+    # The manager confirmed FPL shows 3 free transfers for GW8.
+    history = [week(1, 0), week(2, 1), week(3, 0), week(4, 1), week(5, 0), week(6, 0), week(7, 1)]
+    chips = [
+        {"name": "bboost", "event": 2},
+        {"name": "wildcard", "event": 3},
+        {"name": "3xc", "event": 4},
+    ]
+    assert ti.free_transfers(history, chips, next_gameweek=8) == 3
 
 
 def test_import_uses_latest_purchase_price_for_selling_prices():

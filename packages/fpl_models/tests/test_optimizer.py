@@ -14,8 +14,11 @@ def pool(seed=0, clubs=10):
     rng = np.random.default_rng(seed)
     rows, code = [], 0
     for position, n in PER_POSITION.items():
-        for _ in range(n):
-            price = int(rng.integers(40, 120))
+        for i in range(n):
+            # Like real FPL, each position has cheap enablers, so a valid 100.0m squad
+            # always exists whatever the seed (15 x <= 5.0m = 75.0m).
+            cheap = i < opt.SQUAD_SHAPE[position]
+            price = int(rng.integers(40, 51) if cheap else rng.integers(40, 120))
             rows.append({"player_code": code, "position": position,
                          "team_key": f"club{code % clubs}", "price": price,
                          "base": price / 20 + rng.normal(0, 0.5)})  # fmt: skip
@@ -229,3 +232,30 @@ def test_validator_rejects_an_invalid_plan():
         opt.validate(
             broken, players, current_squad=None, bank=0, free_transfers=1, selling_prices={}
         )
+
+
+def test_kept_and_banned_players_are_respected_every_gameweek():
+    players = pool(seed=5)
+    points = xp(players, gameweeks=(1, 2))
+    free = solve(players, points)
+    favourite = free.gameweeks[0].squad[0]
+    outsider = players.filter(~pl.col("player_code").is_in(free.gameweeks[0].squad))["player_code"][
+        0
+    ]
+    plan = solve(players, points, keep=[outsider], ban=[favourite])
+    for gw in plan.gameweeks:
+        assert outsider in gw.squad
+        assert favourite not in gw.squad
+    assert plan.objective <= free.objective
+
+
+def test_keeping_and_banning_the_same_player_is_rejected():
+    players = pool()
+    with pytest.raises(opt.InfeasibleError, match="both kept and banned"):
+        solve(players, xp(players), keep=[1], ban=[1])
+
+
+def test_wildcard_week_earns_no_extra_free_transfer():
+    players = pool(seed=6)
+    plan = solve(players, xp(players, gameweeks=(1, 2)), free_transfers=1)
+    assert plan.gameweeks[1].free_transfers == 1

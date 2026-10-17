@@ -2,6 +2,7 @@
 
     uv run python -m fpl_models.plan                  # best squad from scratch (wildcard)
     uv run python -m fpl_models.plan --entry 1234567  # plan from your current FPL team
+    uv run python -m fpl_models.plan --entry 1234567 --keep Haaland --ban Palmer
 
 Reads the latest `gold/player_points/expected_points` (run the `warehouse_build` job
 first) and the current squads from the warehouse.
@@ -88,10 +89,16 @@ def describe(
             moves = ", ".join(f"{name[o]} -> {name[n]}" for o, n in pairs) or "none"
         hits = f", -{gw.hits * optimizer.HIT_COST} hit" if gw.hits else ""
         lines.append(
-            f"\nGW{gw.gameweek}  xP {gw.expected_points:.1f}{hits}"
-            f"  (FT {gw.free_transfers}, bank {bank / 10:.1f}m)"
+            f"\nGW{gw.gameweek}  xP {gw.expected_points:.1f}{hits}  (bank {bank / 10:.1f}m)"
         )
-        lines.append(f"  transfers: {moves}")
+        if i == 0 and team is None:
+            lines.append(f"  transfers: {moves}")
+        else:
+            used = len(gw.transfers_in)
+            lines.append(
+                f"  transfers: {used} made, {gw.free_transfers} free available, "
+                f"{gw.hits} hit(s) (-{gw.hits * optimizer.HIT_COST}): {moves}"
+            )
         xi = sorted(gw.lineup, key=lambda p: POSITION_ORDER[position[p]])
         tags = {gw.captain: " (C)", gw.vice_captain: " (V)"}
         lines.append("  XI: " + ", ".join(name[p] + tags.get(p, "") for p in xi))
@@ -102,11 +109,32 @@ def describe(
     return "\n".join(lines)
 
 
+def resolve_players(names: list[str], squads: pl.DataFrame) -> list[int]:
+    """Player codes for names (case-insensitive `web_name`); fails if unknown or ambiguous."""
+    codes = []
+    for name in names:
+        matches = squads.filter(pl.col("web_name").str.to_lowercase() == name.lower())
+        if matches.height != 1:
+            options = squads.filter(
+                pl.col("web_name").str.to_lowercase().str.contains(name.lower())
+            )
+            hint = ", ".join(
+                f"{r['web_name']} ({r['team_key']})" for r in options.iter_rows(named=True)
+            )
+            raise SystemExit(
+                f"'{name}' matches {matches.height} players. Did you mean: {hint or 'none'}"
+            )
+        codes.append(int(matches["player_code"][0]))
+    return codes
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--entry", type=int, help="your FPL team id (from the points page URL)")
     parser.add_argument("--horizon", type=int, default=5)
     parser.add_argument("--free-transfers", type=int, help="override the replayed count")
+    parser.add_argument("--keep", nargs="*", default=[], help="players to keep (web names)")
+    parser.add_argument("--ban", nargs="*", default=[], help="players to avoid (web names)")
     parser.add_argument("--warehouse", type=Path, default=DEFAULT_WAREHOUSE)
     args = parser.parse_args()
 
@@ -122,6 +150,8 @@ def main() -> None:
         bank=team.bank if team else 0,
         free_transfers=args.free_transfers or (team.free_transfers if team else 1),
         selling_prices=team.selling_prices if team else None,
+        keep=resolve_players(args.keep, squads),
+        ban=resolve_players(args.ban, squads),
     )
     print(describe(plan, squads, team))
 

@@ -7,7 +7,8 @@ Everything the planner needs is derivable without logging in:
                       (`element_in_cost`), or the gameweek-1 price for players held
                       since the start
   * free transfers:   replayed from the gameweek history: 1 at GW2, then
-                      min(5, ft - free used + 1); wildcard / free hit keep them
+                      min(5, ft - free used + 1). A wildcard or free hit keeps the
+                      banked transfers but earns no +1 that gameweek.
 """
 
 from collections.abc import Mapping, Sequence
@@ -44,7 +45,7 @@ def free_transfers(
         if gw == 1 or gw >= next_gameweek:
             continue
         if chip_by_gw.get(gw) in KEEPS_FREE_TRANSFERS:
-            ft = min(MAX_FREE_TRANSFERS, ft + 1)
+            continue  # banked transfers are kept, but no +1 is earned that gameweek
         else:
             ft = min(MAX_FREE_TRANSFERS, max(ft - week["event_transfers"], 0) + 1)
     return ft
