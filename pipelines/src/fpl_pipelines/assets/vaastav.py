@@ -101,16 +101,27 @@ def complete_and_consistent(
     fixtures = player_matches["fixture"].n_unique()
     duplicates = player_matches.height - player_matches.n_unique(["element", "fixture"])
     unknown_opponents = player_matches["opponent_team_code"].null_count()
+    unknown_teams = player_matches["team_code"].null_count()
+    self_matches = player_matches.filter(pl.col("team_code") == pl.col("opponent_team_code")).height
+    # Each fixture is exactly one home side against one away side.
+    fixture_sides = player_matches.group_by("fixture", "was_home").agg(
+        pl.col("team_code").n_unique()
+    )
+    inconsistent_fixtures = fixture_sides.filter(pl.col("team_code") != 1).height
     bad_minutes = player_matches.filter(~pl.col("minutes").is_between(0, 130)).height
     return dg.AssetCheckResult(
         passed=fixtures == FIXTURES_PER_SEASON
-        and duplicates == unknown_opponents == bad_minutes == 0,
+        and duplicates == unknown_opponents == unknown_teams == bad_minutes == 0
+        and self_matches == inconsistent_fixtures == 0,
         metadata={
             "rows": player_matches.height,
             "fixtures": fixtures,
             "players": player_matches["element"].n_unique(),
             "duplicates": duplicates,
             "unknown_opponents": unknown_opponents,
+            "unknown_teams": unknown_teams,
+            "self_matches": self_matches,
+            "inconsistent_fixtures": inconsistent_fixtures,
             "bad_minutes": bad_minutes,
         },
     )

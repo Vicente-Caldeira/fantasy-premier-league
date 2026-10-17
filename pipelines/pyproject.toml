@@ -11,8 +11,13 @@ dependencies = [
     "dagster-webserver>=1.9",
     "psycopg[binary]>=3.2",
     "polars>=2.0",
-    "fsspec>=2026.9",
-    "gcsfs>=2026.9",
+    "fsspec>=2025.1",
+    "gcsfs>=2025.1",
+    "dbt-core>=1.12",
+    "dbt-duckdb>=1.11",
+    "dbt-bigquery>=1.12",
+    "dagster-dbt>=0.29",
+    "duckdb>=1.5",
 ]
 
 [build-system]

@@ -1,0 +1,21 @@
+fpl:
+  target: "{{ env_var('DBT_TARGET', 'dev') }}"
+  outputs:
+    dev:
+      type: duckdb
+      path: "{{ env_var('FPL_WAREHOUSE', '../data/warehouse.duckdb') }}"
+      threads: 4
+      extensions: [icu]
+      # Without this, dates derived from UTC timestamps follow the machine's local zone.
+      # BigQuery is always UTC, so both targets now agree.
+      settings:
+        TimeZone: UTC
+    prod:
+      type: bigquery
+      method: oauth
+      project: "{{ env_var('GCP_PROJECT_ID', '') }}"
+      dataset: fpl
+      location: us-central1
+      threads: 4
+      # Bytes-billed cap per query: a runaway query fails instead of costing money.
+      maximum_bytes_billed: 2000000000

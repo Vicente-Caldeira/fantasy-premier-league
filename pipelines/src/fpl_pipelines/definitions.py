@@ -3,14 +3,22 @@
 import os
 
 import dagster as dg
+from dagster_dbt import DbtCliResource
 
-from fpl_pipelines.assets import football_data, fpl_api, fpl_elo_insights, understat, vaastav
+from fpl_pipelines.assets import (
+    football_data,
+    fpl_api,
+    fpl_elo_insights,
+    understat,
+    vaastav,
+    warehouse,
+)
 from fpl_pipelines.github_repo import GitHubResource
 from fpl_pipelines.lake import Lake, PartitionedParquetIOManager
 from fpl_pipelines.resources import FplApiResource
 from fpl_pipelines.snapshots import current_season
 
-ASSET_MODULES = [fpl_api, football_data, fpl_elo_insights, vaastav, understat]
+ASSET_MODULES = [fpl_api, football_data, fpl_elo_insights, vaastav, understat, warehouse]
 
 lake = Lake(base_url=os.getenv("FPL_LAKE_URL", "data"))
 
@@ -55,6 +63,16 @@ def understat_refresh_schedule() -> dg.RunRequest:
     return dg.RunRequest(partition_key=current_season())
 
 
+warehouse_job = dg.define_asset_job(
+    "warehouse_build", selection=dg.AssetSelection.assets(warehouse.warehouse)
+)
+
+# 07:00 UTC: after the daily snapshot (06:00) and the current-season refreshes (06:30).
+warehouse_schedule = dg.ScheduleDefinition(
+    job=warehouse_job, cron_schedule="0 7 * * *", execution_timezone="UTC"
+)
+
+
 @dg.schedule(job=elo_insights_refresh_job, cron_schedule="30 6 * * *", execution_timezone="UTC")
 def elo_insights_refresh_schedule() -> dg.RunRequest:
     """Daily 06:30 UTC, after the snapshot: rebuild the current season's tables."""
@@ -76,6 +94,7 @@ defs = dg.Definitions(
         elo_insights_refresh_job,
         vaastav_history_job,
         understat_refresh_job,
+        warehouse_job,
     ],
     schedules=[
         # 06:00 UTC: after overnight price changes, before most news breaks.
@@ -83,12 +102,14 @@ defs = dg.Definitions(
         season_refresh_schedule,
         elo_insights_refresh_schedule,
         understat_refresh_schedule,
+        warehouse_schedule,
     ],
     resources={
         "fpl_api": FplApiResource(),
         "football_data": football_data.FootballDataResource(),
         "github": GitHubResource(),
         "understat": understat.UnderstatResource(),
+        "dbt": DbtCliResource(project_dir=warehouse.dbt_project),
         "lake": lake,
         "parquet_io_manager": PartitionedParquetIOManager(lake=lake),
     },

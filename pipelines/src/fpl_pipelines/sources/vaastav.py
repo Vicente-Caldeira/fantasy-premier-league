@@ -125,27 +125,40 @@ def deduplicate(matches: pl.DataFrame) -> pl.DataFrame:
 
 
 def enrich(matches: pl.DataFrame, players: pl.DataFrame) -> pl.DataFrame:
-    """Attach position, team and stable cross-season codes; drop non-player entries.
+    """Attach position, the team played for, and stable cross-season codes.
 
-    FPL team ids are season-specific (1..20), team codes are stable, so both the
-    player's and the opponent's team are mapped to codes.
+    `players_raw` is an end-of-season snapshot, so its team is wrong for every match a
+    player played before a mid-season transfer. The team is instead derived from the
+    fixture: home players' opponent is the away side and vice versa. FPL team ids are
+    season-specific (1..20) and are mapped to stable team codes.
     """
-    team_codes = players.select(pl.col("team").alias("opponent_team"), "team_code").unique()
+    sides = matches.group_by("fixture").agg(
+        pl.col("opponent_team").filter(~pl.col("was_home")).first().alias("home_team"),
+        pl.col("opponent_team").filter(pl.col("was_home")).first().alias("away_team"),
+    )
+    team_codes = players.select("team", "team_code").unique()
+    to_code = dict(zip(team_codes["team"], team_codes["team_code"], strict=True))
     return (
-        matches.join(
+        matches.join(sides, on="fixture", how="left")
+        .with_columns(
+            pl.when(pl.col("was_home"))
+            .then(pl.col("home_team"))
+            .otherwise(pl.col("away_team"))
+            .alias("team")
+        )
+        .with_columns(
+            pl.col("team").replace_strict(to_code, default=None).alias("team_code"),
+            pl.col("opponent_team")
+            .replace_strict(to_code, default=None)
+            .alias("opponent_team_code"),
+        )
+        .drop("home_team", "away_team")
+        .join(
             players.select(
-                pl.col("id").alias("element"),
-                pl.col("code").alias("player_code"),
-                "element_type",
-                "team_code",
+                pl.col("id").alias("element"), pl.col("code").alias("player_code"), "element_type"
             ),
             on="element",
             how="inner",  # Assistant Managers are absent from `players`
-        )
-        .join(
-            team_codes.rename({"team_code": "opponent_team_code"}),
-            on="opponent_team",
-            how="left",
         )
         .sort("kickoff_time", "fixture", "element")
     )
