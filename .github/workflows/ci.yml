@@ -66,6 +66,8 @@ jobs:
   images:
     runs-on: ubuntu-latest
     strategy:
+      # Report every image's result rather than cancelling the rest on the first failure.
+      fail-fast: false
       matrix:
         include:
           - name: api

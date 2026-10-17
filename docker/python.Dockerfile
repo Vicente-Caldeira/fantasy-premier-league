@@ -29,6 +29,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable --package "${PACKAGE}"
 
 FROM python:${PYTHON_VERSION}-slim AS runtime
+ARG PACKAGE
 RUN groupadd --system app && useradd --system --gid app --home-dir /app app
 COPY --from=builder /opt/venv /opt/venv
 COPY --chown=app:app dbt /app/dbt
@@ -38,5 +39,5 @@ ENV PATH="/opt/venv/bin:${PATH}" \
     FPL_DBT_DIR=/app/dbt
 WORKDIR /app
 USER app
-# Bake the dbt manifest into the image so containers never parse on start-up.
-RUN cd /app/dbt && dbt parse --profiles-dir . --quiet
+# The pipelines image runs dbt: bake its manifest in so containers never parse on start-up.
+RUN if [ "${PACKAGE}" = "fpl-pipelines" ]; then cd /app/dbt && dbt parse --profiles-dir . --quiet; fi
