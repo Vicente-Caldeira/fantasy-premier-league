@@ -248,3 +248,55 @@ class SeasonSimulator:
         return grid.join(xp, on=["player_code", "gameweek"], how="left").with_columns(
             pl.col("expected_points").fill_null(0.0)
         )
+
+
+def main() -> None:
+    """Simulate seasons for named experiment configs (tuning seasons only).
+
+    uv run python -m fpl_models.season_sim baseline r4_xg_1 --seasons 2021-22 2022-23
+    """
+    import argparse  # noqa: PLC0415 - CLI only
+    import json  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from fpl_models import experiments, player_features  # noqa: PLC0415
+    from fpl_models.data import DEFAULT_WAREHOUSE, load_player_matches, player_gameweeks  # noqa: PLC0415
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("configs", nargs="+")
+    parser.add_argument("--seasons", nargs="+", default=list(experiments.TUNING_SEASONS))
+    parser.add_argument("--hit-penalty", type=float, default=float(optimizer.HIT_COST))
+    parser.add_argument("--horizon", type=int, default=3)
+    parser.add_argument("--tag", default="")
+    args = parser.parse_args()
+    matches = team_strength.load_matches(DEFAULT_WAREHOUSE)
+    features = player_features.build_features(
+        player_features.load_fixture_rows(DEFAULT_WAREHOUSE),
+        player_features.match_lambdas(matches),
+        player_features.schedule_features(matches),
+    )
+    truth = player_gameweeks(load_player_matches(DEFAULT_WAREHOUSE))
+    out = Path("data/experiments/season_sim")
+    out.mkdir(parents=True, exist_ok=True)
+    for name in args.configs:
+        settings = optimizer.Settings(time_limit_seconds=30, hit_penalty=args.hit_penalty)
+        sim = SeasonSimulator(
+            features,
+            truth,
+            matches,
+            experiments.EXPERIMENTS[name],
+            horizon=args.horizon,
+            settings=settings,
+        )
+        label = f"{name}{args.tag}"
+        for season in args.seasons:
+            result = sim.run(season)
+            (out / f"{label}_{season}.json").write_text(
+                json.dumps({"points": result.points, "hits": result.hits})
+            )
+            summary = f"{label:<20} {season}: {result.total} points, {sum(result.hits)} hits"
+            print(summary, flush=True)
+
+
+if __name__ == "__main__":
+    main()

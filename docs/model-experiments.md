@@ -67,20 +67,34 @@ Live check of the crowd counters: a few hours after the GW7 deadline, FPL's `tra
 - **The crowd signal is the single most important addition**, for accuracy and for decisions.
 - **Pure xG targets help MAE but hurt the top-11.** Plausibly they under-reward elite finishers who beat their xG season after season. Round 4 tests a 50/50 blend.
 
+## Round 4: training target blend (no reconciliation)
+
+Same as `all_in` without reconcile; crowd ownership is now the fraction of managers (selected ÷ (all ownership ÷ 15)). That's stable as FPL grows, and identical in effect to the log count: 1.8056 vs 1.8080.
+
+| Target (goals ↔ xG) | Δ MAE vs baseline (95% CI) | Δ captain | Δ top-11 |
+|---|---|---|---|
+| **xG only (1.0)** | **−0.062 (−0.076, −0.049)** | −1.2 (−2.8, +0.3) | +0.4 (−3.0, +3.7) |
+| 50/50 (0.5) | −0.051 (−0.061, −0.042) | −0.4 (−1.7, +1.0) | +1.5 (−1.5, +4.5) |
+| goals only (0.0) | −0.039 (−0.046, −0.031) | −1.1 | +1.2 |
+
+Directly, xG-only vs 50/50: MAE −0.011 (−0.016, −0.005), significant; top-11 −1.1 (−2.8, +0.5), not significant. **Both cut MAE by ~3%**, the largest gain so far. Decision metrics can't separate them, so **season simulation is the tie-breaker** (below).
+
 ## Backlog (ranked by expected value)
 
-| Idea | Why it might help | Notes |
+| Idea | Why it might help | Status |
 |---|---|---|
-| **Crowd signal:** pre-deadline transfers in/out, ownership | Managers react to team news (injuries, rotation) before the deadline. That's the information the minutes model lacks most. | **Check timing first:** confirm the per-gameweek transfer counts are for transfers made *before* that gameweek's deadline |
-| **Share-of-team features** (player xG90 ÷ team λ, minutes share) | The model has to infer how team expected goals splits between players; giving the split directly may sharpen attackers | |
-| **Per-position models** | Defenders' and forwards' points come from different events | |
-| **Recency-weighted training + longer feature half-lives** | Old seasons may describe players who've changed role | Partly covered in round 1 |
-| **Opponent-by-position strength** (goals/xG conceded to forwards, etc.) | Team λ is position-agnostic | |
-| **Rest days, fixture congestion, European games** | Rotation risk for clubs in Europe | Needs fixture data from other competitions (Elo-Insights has it for 2024+) |
-| **Penalty and set-piece takers** | Large share of goals for a few players | FPL exposes takers only for the current state; no history |
-| **Hyperparameter search** (Optuna) | Only a handful of settings tried by hand | After the features settle |
-| **Distribution, not just the mean** (quantiles / variance) | Captaincy and rank decisions depend on upside and risk | Feeds a risk-aware optimiser objective |
-| **Direct-points model stacked with the components** | A second view may correct systematic component errors | |
+| ~~Crowd signal~~ | Team news before the deadline | **Done:** the biggest single gain (window-invariant share) |
+| ~~xG/xA training targets~~ | Less label noise | **Done:** large MAE gain; season simulation decides pure vs blend |
+| ~~Rest days / congestion (league)~~ | Rotation | Done: small effect |
+| ~~Team reconciliation~~ | Coherent team totals | Done: hurts in combination; coherence moved to the simulator |
+| **Season simulation as the acceptance test** | Total points is the real objective; per-gameweek metrics are proxies | **In progress** |
+| **Risk-aware captaincy and optimiser** (simulator distributions: p90, P(haul)) | Captain picks and rank depend on upside; expected value alone undervalues premiums | Next |
+| **European and cup fixtures** (minutes, rest) | Rotation for clubs in Europe | Needs other-competition ingestion (Elo-Insights has it from 2025-26) |
+| **Opta features** (touches in box, chances created, xGOT) | Richer attacking signal | Data only from 2024-25: needs a separate tuning split (e.g. tune on 2024-25, hold out 2025-26) |
+| **Daily snapshots → availability model** (news, status, chance of playing) | Minutes are the largest error source | Data accrues from 2026-10-17; train once a season of snapshots exists |
+| **Prediction timing** (run ~2 h before each deadline) | Crowd share and news are most complete near the deadline | Dagster sensor on `dim_gameweeks` |
+| **Per-position models, share-of-team features, hyperparameter search** | Further accuracy | After the above |
+| **Chip strategy** (wildcard, free hit, bench boost, triple captain) | Large point swings per season | Simulator + optimiser make it testable |
 
 ## Tried and rejected
 
