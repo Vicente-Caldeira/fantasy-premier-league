@@ -25,6 +25,11 @@ jobs:
       - run: uv run ruff format --check .
       - run: uv run mypy
       - run: uv run pytest --cov --cov-report=term-missing
+      - name: Billing kill-switch tests
+        working-directory: infra/terraform/bootstrap/functions/billing_kill_switch
+        run: >
+          uv run --no-project --python 3.12 --with-requirements requirements.txt --with pytest
+          python -m pytest -q -p no:cacheprovider -o addopts="" --rootdir=.
 
   web:
     runs-on: ubuntu-latest

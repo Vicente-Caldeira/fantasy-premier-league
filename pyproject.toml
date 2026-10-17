@@ -45,6 +45,7 @@ known-first-party = ["fpl_core", "fpl_models", "fpl_api", "fpl_pipelines"]
 
 [tool.ruff.lint.per-file-ignores]
 "**/tests/**" = ["S101", "ANN", "PLR2004"]
+"**/test_*.py" = ["S101", "ANN", "PLR2004"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"

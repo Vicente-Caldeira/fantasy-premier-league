@@ -41,3 +41,15 @@ variable "bigquery_daily_query_limit_gib" {
   type        = number
   default     = 30
 }
+
+variable "cloud_run_spend_cap" {
+  description = "Hard monthly cap on Cloud Run GROSS cost. Free tier is worth ~EUR 5/month, so EUR 2 leaves margin for reporting lag."
+  type        = number
+  default     = 2
+}
+
+variable "cloud_functions_spend_cap" {
+  description = "Hard monthly cap on Cloud Run functions GROSS cost. The kill-switch uses a tiny fraction of the free tier."
+  type        = number
+  default     = 1
+}

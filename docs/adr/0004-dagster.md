@@ -1,6 +1,6 @@
 # 4. Dagster for orchestration
 
-- Status: accepted
+- Status: accepted; hosted scheduling superseded by [ADR 0006](0006-spend-caps-and-free-compute.md)
 - Date: 2026-10-17
 
 ## Context

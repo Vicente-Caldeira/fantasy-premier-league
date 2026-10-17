@@ -39,7 +39,6 @@ resource "google_project_iam_member" "deployer" {
   for_each = toset([
     "roles/artifactregistry.admin",
     "roles/bigquery.admin",
-    "roles/cloudscheduler.admin",
     "roles/iam.serviceAccountAdmin",
     "roles/iam.serviceAccountUser",
     "roles/resourcemanager.projectIamAdmin",

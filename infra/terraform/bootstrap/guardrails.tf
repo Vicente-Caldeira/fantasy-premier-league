@@ -44,3 +44,44 @@ resource "google_billing_budget" "account_wide" {
 
   # No all_updates_rule: budgets email billing admins at each threshold by default.
 }
+
+# Spend caps: Google pauses the service itself once GROSS cost (before any free-tier or
+# trial credit) reaches the cap. Caps sit well below each service's free-tier value, so
+# even with reporting lag the net bill for these services stays at zero.
+locals {
+  spend_caps = {
+    cloud_run = {
+      service_id = "152E-C115-5142" # Cloud Run
+      amount     = var.cloud_run_spend_cap
+    }
+    cloud_functions = {
+      service_id = "29E7-DA93-CA13" # Cloud Run functions
+      amount     = var.cloud_functions_spend_cap
+    }
+  }
+}
+
+resource "terraform_data" "spend_cap" {
+  for_each = local.spend_caps
+
+  triggers_replace = {
+    billing_account = var.billing_account_id
+    display_name    = "spend-cap: ${each.key}"
+    project_number  = data.google_project.this.number
+    service_id      = each.value.service_id
+    amount          = each.value.amount
+    currency        = var.budget_currency
+    quota_project   = var.project_id
+  }
+
+  provisioner "local-exec" {
+    command = "python3 ${path.module}/scripts/spend_cap.py apply '${jsonencode(self.triggers_replace)}'"
+  }
+
+  provisioner "local-exec" {
+    when    = destroy
+    command = "python3 ${path.module}/scripts/spend_cap.py delete '${jsonencode(self.triggers_replace)}'"
+  }
+
+  depends_on = [google_project_service.this]
+}

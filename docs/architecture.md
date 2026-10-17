@@ -50,7 +50,7 @@ Non-goals for v1: mobile apps, social features, paid tiers.
 | IaC | **Terraform** (separate `dev` and `prod` workspaces) | Industry standard; reviewable infra changes |
 | Containers / compute | **Docker + Cloud Run** (services + jobs) | Production-grade serverless that scales to zero. Images stay K8s-portable. GKE is skipped because of cost ([ADR 0003](adr/0003-cloud-run-over-gke.md)) |
 | Python tooling | **Python 3.12, uv, Ruff, mypy (strict), pytest, Hypothesis, pre-commit** | Modern, fast, typed |
-| Orchestration | **Dagster**. Locally: webserver + daemon. Hosted: Cloud Scheduler triggers Cloud Run Jobs, the webserver runs on Cloud Run scaled to zero, run storage lives in Neon | Asset-based lineage, partitions per gameweek, and a first-class dbt integration. No always-on daemon to pay for ([ADR 0004](adr/0004-dagster.md)) |
+| Orchestration | **Dagster**. Locally: webserver + daemon. Hosted: scheduled **GitHub Actions** workflows run Dagster jobs (free and unlimited for public repos), and run storage lives in Neon | Asset-based lineage, partitions per gameweek, and a first-class dbt integration. No paid compute for batch work ([ADR 0004](adr/0004-dagster.md), [ADR 0006](adr/0006-spend-caps-and-free-compute.md)) |
 | Raw storage | **GCS** (bronze, immutable) | Lets us replay and backfill from the raw source data |
 | Warehouse + transforms | **BigQuery + dbt** | Standard analytics engineering, with tests, docs and lineage |
 | Data contracts | **Pydantic** (API payloads), **Pandera** (dataframes), **dbt tests** | Bad upstream data fails loudly |
@@ -105,7 +105,7 @@ fantasy-premier-league/
 | Resource | Free allowance | Our expected usage |
 |---|---|---|
 | Cloud Run | 2M requests, 180k vCPU-s/month | Low traffic. Services scale to zero |
-| Cloud Scheduler | 3 jobs | Ingest, train, infer |
+| Cloud Run spend caps | Google pauses Cloud Run / functions at €2 / €1 **gross** cost | Well below the free-tier value |
 | BigQuery | 10 GB storage, 1 TB queries/month | Under 5 GB total |
 | GCS (`us-central1`) | 5 GB | Raw snapshots, compressed |
 | Artifact Registry | 0.5 GB | Slim images + cleanup policy keeping the last 2 tags |
@@ -116,7 +116,7 @@ fantasy-premier-league/
 **Guards:**
 - Free-tier regions are enforced in Terraform.
 - No VPC connectors, NAT, load balancers or min-instances (none of these have a free tier).
-- The kill-switch unlinks billing once spend exceeds $1.
+- The kill-switch unlinks billing once spend exceeds €1. See [ADR 0005](adr/0005-spend-guardrails.md) and [ADR 0006](adr/0006-spend-caps-and-free-compute.md) for the full set of guardrails.
 
 ## Notes
 
