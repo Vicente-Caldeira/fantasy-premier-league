@@ -14,6 +14,14 @@ sources:
         meta:
           external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/fpl/teams/*/data.parquet', hive_partitioning = false, union_by_name = true)"
           dagster: {asset_key: [silver, fpl, teams]}
+      - name: players
+        meta:
+          external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/fpl/players/*/data.parquet', hive_partitioning = false, union_by_name = true)"
+          dagster: {asset_key: [silver, fpl, players]}
+      - name: player_matches
+        meta:
+          external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/fpl/player_matches/*/data.parquet', hive_partitioning = false, union_by_name = true)"
+          dagster: {asset_key: [silver, fpl, player_matches]}
       - name: fixtures
         meta:
           external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/fpl/fixtures_table/*/data.parquet', hive_partitioning = false, union_by_name = true)"
@@ -26,6 +34,10 @@ sources:
         meta:
           external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/vaastav/player_matches/*/data.parquet', hive_partitioning = false, union_by_name = true)"
           dagster: {asset_key: [silver, vaastav, player_matches]}
+      - name: players
+        meta:
+          external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/vaastav/players/*/data.parquet', hive_partitioning = false, union_by_name = true)"
+          dagster: {asset_key: [silver, vaastav, players]}
 
   - name: football_data
     description: football-data.co.uk results and bookmaker odds, 2016-17 onwards.
@@ -54,3 +66,7 @@ sources:
         meta:
           external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/fpl_elo_insights/matches/*/data.parquet', hive_partitioning = false, union_by_name = true)"
           dagster: {asset_key: [silver, fpl_elo_insights, matches]}
+      - name: player_match_stats
+        meta:
+          external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/fpl_elo_insights/player_match_stats/*/data.parquet', hive_partitioning = false, union_by_name = true)"
+          dagster: {asset_key: [silver, fpl_elo_insights, player_match_stats]}

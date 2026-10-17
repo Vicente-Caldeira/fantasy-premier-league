@@ -37,3 +37,38 @@ models:
         description: Null before 2016-17, when FPL-coded history starts.
       - name: p_home_win
         description: Opening implied home-win probability, margin removed.
+
+  - name: dim_players
+    description: One row per player across seasons (FPL's stable `code`), latest name.
+    columns:
+      - name: player_code
+        data_tests: [unique, not_null]
+
+  - name: fct_player_matches
+    description: >
+      One row per player per fixture since 2016-17, including unused squad members.
+      FPL stats, points and price every season; Opta detail (touches, chances created,
+      xGOT, duels) from 2024-25. `total_points` follows each season's own scoring rules.
+    columns:
+      - name: player_match_key
+        data_tests: [unique, not_null]
+      - name: match_key
+        data_tests:
+          - not_null
+          - relationships: {arguments: {to: ref('fct_matches'), field: match_key}}
+      - name: player_code
+        data_tests:
+          - not_null
+          - relationships: {arguments: {to: ref('dim_players'), field: player_code}}
+      - name: team_key
+        data_tests: [not_null]
+      - name: opponent_team_key
+        data_tests: [not_null]
+      - name: position
+        data_tests:
+          - not_null
+          - accepted_values: {arguments: {values: [GKP, DEF, MID, FWD]}}
+      - name: minutes
+        data_tests:
+          - not_null
+          - value_between: {arguments: {low: 0, high: 130}}
