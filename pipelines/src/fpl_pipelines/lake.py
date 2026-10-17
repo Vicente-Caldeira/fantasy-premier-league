@@ -1,8 +1,10 @@
 """Object storage for the data lake: a local directory in dev, a GCS bucket when hosted.
 
 Layout (all paths relative to `base_url`):
-    bronze/<source>/<dataset>/snapshot_date=YYYY-MM-DD/<dataset>.json.gz   immutable raw
-    silver/<table>/snapshot_date=YYYY-MM-DD/data.parquet                   typed tables
+    bronze/<source>/<dataset>/<partition_column>=<key>/...   immutable raw files
+    silver/<source>/<table>/<partition_column>=<key>/data.parquet   typed tables
+
+`partition_column` is `snapshot_date` for daily snapshots and `season` for seasonal data.
 """
 
 import gzip
@@ -42,24 +44,37 @@ class Lake(dg.ConfigurableResource):  # type: ignore[type-arg]
             data: bytes = f.read()
         return data
 
-    def write_json_gz(self, path: str, payload: Any) -> int:  # noqa: ANN401 - raw JSON
-        # mtime=0 makes identical payloads byte-identical, so content hashes are stable.
-        data = gzip.compress(json.dumps(payload, separators=(",", ":")).encode(), mtime=0)
-        self.write_bytes(path, data)
-        return len(data)
+    def list(self, prefix: str) -> list[str]:
+        """Paths (relative to the lake root) directly under `prefix`, sorted."""
+        fs, root = self._fs()
+        if not fs.exists(f"{root}/{prefix}"):
+            return []
+        return sorted(p.removeprefix(f"{root}/") for p in fs.ls(f"{root}/{prefix}", detail=False))
 
     def read_json_gz(self, path: str) -> Any:  # noqa: ANN401 - raw JSON
         return json.loads(gzip.decompress(self.read_bytes(path)))
 
 
+def encode_json_gz(payload: Any) -> bytes:  # noqa: ANN401 - raw JSON
+    # mtime=0 makes identical payloads byte-identical, so content hashes are stable.
+    return gzip.compress(json.dumps(payload, separators=(",", ":")).encode(), mtime=0)
+
+
 class PartitionedParquetIOManager(dg.ConfigurableIOManager):
-    """Stores each partition of a Polars DataFrame asset as one Parquet file."""
+    """Stores each partition of a Polars DataFrame asset as one Parquet file.
+
+    Assets name their partition column with `metadata={"partition_column": ...}`;
+    the default is `snapshot_date`.
+    """
 
     lake: dg.ResourceDependency[Lake]
 
     def _path(self, context: dg.OutputContext | dg.InputContext) -> str:
+        output = context if isinstance(context, dg.OutputContext) else context.upstream_output
+        metadata = (output.definition_metadata if output else None) or {}
+        column = metadata.get("partition_column", "snapshot_date")
         table = "/".join(context.asset_key.path)
-        return f"{table}/snapshot_date={context.asset_partition_key}/data.parquet"
+        return f"{table}/{column}={context.asset_partition_key}/data.parquet"
 
     def handle_output(self, context: dg.OutputContext, obj: pl.DataFrame) -> None:
         path = self._path(context)
