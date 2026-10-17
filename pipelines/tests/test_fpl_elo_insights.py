@@ -19,6 +19,7 @@ import pytest
 
 from fpl_core.http import RetryingHttpClient
 from fpl_pipelines.assets import fpl_elo_insights as assets
+from fpl_pipelines.github_repo import GitHubResource, git_blob_sha
 from fpl_pipelines.lake import Lake, PartitionedParquetIOManager
 from fpl_pipelines.snapshots import current_season
 from fpl_pipelines.sources import fpl_elo_insights as src
@@ -80,7 +81,7 @@ class FakeGitHub:
 
     def tree(self):
         entries = [
-            {"path": p, "type": "blob", "sha": src.git_blob_sha(b)} for p, b in self.files.items()
+            {"path": p, "type": "blob", "sha": git_blob_sha(b)} for p, b in self.files.items()
         ]
         entries.append(
             {
@@ -105,7 +106,7 @@ class FakeGitHub:
 GITHUB = FakeGitHub({})
 
 
-class FakeGitHubResource(assets.GitHubResource):
+class FakeGitHubResource(GitHubResource):
     def api(self):
         return RetryingHttpClient("https://api.test", transport=httpx.MockTransport(GITHUB.handler))
 
@@ -149,7 +150,7 @@ def checks(result):
 
 def test_git_blob_sha_matches_git():
     # `printf 'hello\n' | git hash-object --stdin`
-    assert src.git_blob_sha(b"hello\n") == "ce013625030ba8dba906f756967f9e9ca394464a"
+    assert git_blob_sha(b"hello\n") == "ce013625030ba8dba906f756967f9e9ca394464a"
 
 
 def test_select_files_handles_both_layouts_and_ignores_the_rest():
@@ -239,15 +240,15 @@ def test_missing_required_column_is_rejected():
 def test_snapshot_downloads_verified_blobs_and_pins_the_commit(lake):
     result = run(lake, [assets.repo_snapshot], TODAY)
     assert result.success
-    manifest = json.loads(lake.read_bytes(assets.manifest_path(TODAY)))
+    manifest = json.loads(lake.read_bytes(assets.SOURCE.manifest_path(TODAY)))
     assert manifest["commit"] == COMMIT
     assert len(manifest["files"]) == 76  # 38 gameweeks x 2 datasets; EFL Cup ignored
-    assert all(lake.exists(assets.blob_path(f["sha"])) for f in manifest["files"])
+    assert all(lake.exists(assets.SOURCE.blob_path(f["sha"])) for f in manifest["files"])
 
 
 def test_only_missing_blobs_are_downloaded(lake):
     already = next(iter(GITHUB.files.values()))
-    lake.write_bytes(assets.blob_path(src.git_blob_sha(already)), already)
+    lake.write_bytes(assets.SOURCE.blob_path(git_blob_sha(already)), already)
     run(lake, [assets.repo_snapshot], TODAY)
     assert len(GITHUB.raw_requests) == 75
 
@@ -263,7 +264,7 @@ def test_corrupted_download_fails_the_snapshot(lake, monkeypatch):
     monkeypatch.setattr(GITHUB, "handler", corrupt_raw_files)
     result = run(lake, [assets.repo_snapshot], TODAY)
     assert not result.success
-    assert not lake.exists(assets.manifest_path(TODAY))
+    assert not lake.exists(assets.SOURCE.manifest_path(TODAY))
 
 
 def test_season_tables_build_and_pass_checks(lake):

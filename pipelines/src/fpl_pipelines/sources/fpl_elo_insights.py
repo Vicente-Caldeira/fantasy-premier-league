@@ -1,8 +1,6 @@
 """FPL-Elo-Insights (github.com/olbauday/FPL-Elo-Insights): Opta-style match stats.
 
-The repo updates twice daily. Ingestion is pinned to an upstream commit and
-content-addressed by git blob SHA: one tree call lists every file with its hash, and
-only blobs we haven't stored yet are downloaded (and verified against that hash).
+The repo updates twice daily; bronze snapshots it via `fpl_pipelines.github_repo`.
 
 Layouts:
     2024-2025       data/2024-2025/<dataset>/GW<n>/<dataset>.csv
@@ -11,32 +9,28 @@ Layouts:
 The repo has no license, so its data is ingested for personal use and never committed.
 """
 
-import hashlib
-import io
 import re
-from dataclasses import dataclass
 from typing import Any
-from urllib.parse import quote
 
 import polars as pl
 
+from fpl_pipelines.github_repo import FileRef
+from fpl_pipelines.sources.csv_contract import (
+    ContractError,
+    optional,
+    read_strings,
+    required,
+    typed,
+    value,
+)
+
 REPO = "olbauday/FPL-Elo-Insights"
-API_URL = "https://api.github.com"
-RAW_URL = "https://raw.githubusercontent.com"
+BRANCH = "main"
 FIRST_SEASON = 2024
 DATASETS = ("matches", "playermatchstats")
 
 _LEGACY = re.compile(r"^data/(\d{4})-(\d{4})/(\w+)/GW(\d+)/(\w+)\.csv$")
 _CURRENT = re.compile(r"^data/(\d{4})-(\d{4})/By Tournament/Premier League/GW(\d+)/(\w+)\.csv$")
-
-
-@dataclass(frozen=True)
-class FileRef:
-    season: str  # "2026-27"
-    gameweek: int
-    dataset: str
-    path: str
-    sha: str
 
 
 def _season(start: str, end: str) -> str:
@@ -58,17 +52,8 @@ def select_files(tree: list[dict[str, Any]]) -> list[FileRef]:
         else:
             continue
         if dataset in DATASETS and int(start) >= FIRST_SEASON:
-            refs.append(FileRef(_season(start, end), int(gw), dataset, path, entry["sha"]))
-    return sorted(refs, key=lambda r: (r.season, r.dataset, r.gameweek))
-
-
-def raw_path(commit: str, path: str) -> str:
-    return f"/{REPO}/{commit}/{quote(path)}"
-
-
-def git_blob_sha(content: bytes) -> str:
-    """The SHA git assigns a file's content, used to verify downloads."""
-    return hashlib.sha1(b"blob %d\0" % len(content) + content, usedforsecurity=False).hexdigest()
+            refs.append(FileRef(_season(start, end), dataset, path, entry["sha"], int(gw)))
+    return sorted(refs, key=lambda r: (r.season, r.dataset, r.gameweek or 0))
 
 
 # --- parsing --------------------------------------------------------------------------
@@ -114,41 +99,6 @@ MATCH_SIDE_FLOATS = {
 }  # fmt: skip
 
 
-class ContractError(ValueError):
-    """A required column is missing or a count column holds a fractional value."""
-
-
-def _read(data: bytes) -> pl.DataFrame:
-    return pl.read_csv(
-        io.BytesIO(data.removeprefix(b"\xef\xbb\xbf")), infer_schema=False, encoding="utf8"
-    )
-
-
-def _value(raw: pl.DataFrame, source: str, *, required: bool) -> pl.Expr:
-    if source not in raw.columns:
-        if required:
-            raise ContractError(f"missing required column {source!r}")
-        return pl.lit(None, pl.String)
-    return pl.col(source).str.strip_chars().replace("", None)
-
-
-def _float(raw: pl.DataFrame, source: str, *, required: bool = True) -> pl.Expr:
-    return _value(raw, source, required=required).cast(pl.Float64, strict=True)
-
-
-def _typed(
-    raw: pl.DataFrame, floats: dict[str, pl.Expr], counts: dict[str, pl.Expr]
-) -> pl.DataFrame:
-    """Counts arrive as "75.0"; parse as floats, reject fractions, then cast to Int64."""
-    parsed = raw.select(**floats, **counts)
-    fractional = [
-        name for name in counts if parsed.filter(pl.col(name) != pl.col(name).round()).height
-    ]
-    if fractional:
-        raise ContractError(f"fractional values in count columns: {fractional}")
-    return parsed.with_columns(pl.col(list(counts)).cast(pl.Int64))
-
-
 def _utc(raw: pl.Expr) -> pl.Expr:
     """Kickoff times come in three shapes; all are normalised to UTC.
 
@@ -168,13 +118,13 @@ def _utc(raw: pl.Expr) -> pl.Expr:
 
 
 def parse_player_match_stats(data: bytes, season: str, gameweek: int) -> pl.DataFrame:
-    raw = _read(data)
-    keys = [_value(raw, k, required=True).alias(k) for k in PLAYER_KEYS]
-    floats = {c: _float(raw, c) for c in PLAYER_FLOATS}
-    floats |= {c: _float(raw, c, required=False) for c in PLAYER_OPTIONAL_FLOATS}
-    counts = {c: _float(raw, c) for c in PLAYER_COUNTS}
-    counts |= {c: _float(raw, c, required=False) for c in PLAYER_OPTIONAL_COUNTS}
-    stats = _typed(raw, floats, counts)
+    raw = read_strings(data)
+    keys = [value(raw, k, required=True).alias(k) for k in PLAYER_KEYS]
+    floats = {c: required(raw, c) for c in PLAYER_FLOATS}
+    floats |= {c: optional(raw, c) for c in PLAYER_OPTIONAL_FLOATS}
+    counts = {c: required(raw, c) for c in PLAYER_COUNTS}
+    counts |= {c: optional(raw, c) for c in PLAYER_OPTIONAL_COUNTS}
+    stats = typed(raw, floats, counts)
     ids = raw.select(keys).with_columns(pl.col("player_id").cast(pl.Float64).cast(pl.Int64))
     return pl.concat([ids, stats], how="horizontal").select(
         pl.lit(season).alias("season"), pl.lit(gameweek).alias("gameweek"), pl.all()
@@ -182,18 +132,22 @@ def parse_player_match_stats(data: bytes, season: str, gameweek: int) -> pl.Data
 
 
 def parse_matches(data: bytes, season: str) -> pl.DataFrame:
-    raw = _read(data)
+    raw = read_strings(data)
     floats: dict[str, pl.Expr] = {}
-    counts: dict[str, pl.Expr] = {"gameweek": _float(raw, "gameweek")}
+    counts: dict[str, pl.Expr] = {"gameweek": required(raw, "gameweek")}
     for side in ("home", "away"):
-        counts |= {f"{side}_{n}": _float(raw, f"{side}_{s}") for n, s in MATCH_SIDE_COUNTS.items()}
-        floats |= {f"{side}_{n}": _float(raw, f"{side}_{s}") for n, s in MATCH_SIDE_FLOATS.items()}
-    stats = _typed(raw, floats, counts)
+        counts |= {
+            f"{side}_{n}": required(raw, f"{side}_{s}") for n, s in MATCH_SIDE_COUNTS.items()
+        }
+        floats |= {
+            f"{side}_{n}": required(raw, f"{side}_{s}") for n, s in MATCH_SIDE_FLOATS.items()
+        }
+    stats = typed(raw, floats, counts)
     meta = raw.select(
-        _value(raw, "match_id", required=True).alias("match_id"),
-        _utc(_value(raw, "kickoff_time", required=True)).alias("kickoff_time"),
-        (_value(raw, "finished", required=True) == "True").alias("finished"),
-        _value(raw, "tournament", required=False).alias("tournament"),
+        value(raw, "match_id", required=True).alias("match_id"),
+        _utc(value(raw, "kickoff_time", required=True)).alias("kickoff_time"),
+        (value(raw, "finished", required=True) == "True").alias("finished"),
+        value(raw, "tournament", required=False).alias("tournament"),
     )
     # Every fixture has a kickoff time, so a null here means an unrecognised format.
     unparsed = meta.filter(pl.col("kickoff_time").is_null()).height

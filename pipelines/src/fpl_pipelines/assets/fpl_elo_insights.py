@@ -1,68 +1,28 @@
-"""FPL-Elo-Insights ingestion: content-addressed bronze, season-partitioned silver.
+"""FPL-Elo-Insights ingestion: commit-pinned bronze, season-partitioned silver.
 
-Bronze (daily): resolve upstream `main` to a commit, list its tree, download only blobs
-not stored yet (verified against their git SHA), and write a manifest that maps each
-file to its blob. A manifest pins exactly which upstream state a day's data came from.
-
-Silver (per season): rebuild a season's tables from the latest manifest.
+Bronze (daily) snapshots the upstream repo via `fpl_pipelines.github_repo`; silver
+rebuilds a season's tables from the latest manifest.
 """
 
-import json
-import os
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
-from dataclasses import asdict
-from typing import Any
 
 import dagster as dg
 import polars as pl
 
-from fpl_core.http import RetryingHttpClient
+from fpl_pipelines.github_repo import GitHubResource, RepoSource
 from fpl_pipelines.lake import Lake
-from fpl_pipelines.snapshots import current_season, daily_snapshots, season_label, take_snapshot
+from fpl_pipelines.snapshots import current_season, daily_snapshots, season_label
 from fpl_pipelines.sources import fpl_elo_insights as src
 
 BRONZE = ["bronze", "fpl_elo_insights"]
 SILVER = ["silver", "fpl_elo_insights"]
-MANIFESTS = "bronze/fpl_elo_insights/manifests"
 MATCHES_PER_SEASON = 380
+
+SOURCE = RepoSource("fpl_elo_insights", src.REPO, src.BRANCH, src.select_files)
 
 elo_seasons = dg.StaticPartitionsDefinition(
     [season_label(y) for y in range(src.FIRST_SEASON, int(current_season()[:4]) + 1)]
 )
-
-
-class GitHubResource(dg.ConfigurableResource):  # type: ignore[type-arg]
-    """GitHub API + raw content. A token is optional; it raises the API rate limit."""
-
-    api_url: str = src.API_URL
-    raw_url: str = src.RAW_URL
-    token: str | None = os.getenv("GITHUB_TOKEN")
-
-    def api(self) -> RetryingHttpClient:
-        headers = {"Accept": "application/vnd.github+json"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
-        return RetryingHttpClient(self.api_url, headers=headers)
-
-    def raw(self) -> RetryingHttpClient:
-        return RetryingHttpClient(self.raw_url)
-
-
-def blob_path(sha: str) -> str:
-    return f"bronze/fpl_elo_insights/blobs/{sha[:2]}/{sha}.csv"
-
-
-def manifest_path(snapshot_date: str) -> str:
-    return f"{MANIFESTS}/snapshot_date={snapshot_date}/manifest.json"
-
-
-def latest_manifest(lake: Lake) -> dict[str, Any]:
-    days = lake.list(MANIFESTS)
-    if not days:
-        raise dg.Failure("No FPL-Elo-Insights manifest yet; materialise repo_snapshot first")
-    manifest: dict[str, Any] = json.loads(lake.read_bytes(f"{days[-1]}/manifest.json"))
-    return manifest
 
 
 @dg.asset(key_prefix=BRONZE, partitions_def=daily_snapshots, group_name="fpl_elo_insights_bronze")
@@ -70,34 +30,7 @@ def repo_snapshot(
     context: dg.AssetExecutionContext, github: GitHubResource, lake: Lake
 ) -> dg.MaterializeResult[None]:
     """Manifest of the upstream commit's files, plus any new content-addressed blobs."""
-
-    def fetch() -> bytes:
-        with github.api() as api:
-            commit = api.get(f"/repos/{src.REPO}/commits/main").json()["sha"]
-            tree = api.get(f"/repos/{src.REPO}/git/trees/{commit}?recursive=1").json()
-        if tree.get("truncated"):
-            raise dg.Failure("GitHub returned a truncated tree; files would be missed")
-        refs = src.select_files(tree["tree"])
-        missing = [r for r in refs if not lake.exists(blob_path(r.sha))]
-
-        def download(ref: src.FileRef) -> None:
-            content = raw.get(src.raw_path(commit, ref.path)).content
-            if src.git_blob_sha(content) != ref.sha:
-                raise dg.Failure(f"{ref.path}: content does not match git SHA {ref.sha}")
-            lake.write_bytes(blob_path(ref.sha), content)
-
-        with github.raw() as raw, ThreadPoolExecutor(max_workers=4) as pool:
-            list(pool.map(download, missing))
-        context.log.info("Commit %s: %d files, %d new blobs", commit, len(refs), len(missing))
-        manifest = {"repo": src.REPO, "commit": commit, "files": [asdict(r) for r in refs]}
-        return json.dumps(manifest, indent=1).encode()
-
-    return take_snapshot(context, lake, manifest_path(context.partition_key), fetch)
-
-
-def _season_files(lake: Lake, season: str, dataset: str) -> list[src.FileRef]:
-    refs = [src.FileRef(**f) for f in latest_manifest(lake)["files"]]
-    return [r for r in refs if r.season == season and r.dataset == dataset]
+    return SOURCE.snapshot(context, github, lake)
 
 
 def silver_asset(name: str) -> Callable[[Callable[..., pl.DataFrame]], dg.AssetsDefinition]:
@@ -116,20 +49,17 @@ def silver_asset(name: str) -> Callable[[Callable[..., pl.DataFrame]], dg.Assets
 def matches(context: dg.AssetExecutionContext, lake: Lake) -> pl.DataFrame:
     """Premier League matches with team-level stats and Elo (one row per fixture)."""
     season = context.partition_key
-    refs = _season_files(lake, season, "matches")
-    return pl.concat([src.parse_matches(lake.read_bytes(blob_path(r.sha)), season) for r in refs])
+    refs = SOURCE.files(lake, season, "matches")
+    return pl.concat([src.parse_matches(SOURCE.read(lake, r), season) for r in refs])
 
 
 @silver_asset("player_match_stats")
 def player_match_stats(context: dg.AssetExecutionContext, lake: Lake) -> pl.DataFrame:
     """Opta-style per-player match stats: touches, chances created, xG/xA/xGOT, duels."""
     season = context.partition_key
-    refs = _season_files(lake, season, "playermatchstats")
+    refs = SOURCE.files(lake, season, "playermatchstats")
     return pl.concat(
-        [
-            src.parse_player_match_stats(lake.read_bytes(blob_path(r.sha)), season, r.gameweek)
-            for r in refs
-        ]
+        [src.parse_player_match_stats(SOURCE.read(lake, r), season, r.gameweek or 0) for r in refs]
     )
 
 

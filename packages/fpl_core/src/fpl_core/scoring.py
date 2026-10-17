@@ -79,8 +79,10 @@ def defensive_contribution_points(position: Position, stats: MatchStats) -> int:
 
 def points(position: Position, stats: MatchStats) -> int:
     """Total FPL points for one player in one match."""
+    cards = stats.yellow_cards * YELLOW_CARD_POINTS + stats.red_cards * RED_CARD_POINTS
     if stats.minutes == 0:
-        return 0
+        # Unused substitutes booked on the bench still lose points (14 cases 2016-2026).
+        return cards
 
     total = LONG_PLAY_POINTS if stats.minutes >= LONG_PLAY_MINUTES else SHORT_PLAY_POINTS
     total += stats.goals_scored * GOAL_POINTS[position]
@@ -95,8 +97,7 @@ def points(position: Position, stats: MatchStats) -> int:
 
     total += stats.penalties_saved * PENALTY_SAVED_POINTS
     total += stats.penalties_missed * PENALTY_MISSED_POINTS
-    total += stats.yellow_cards * YELLOW_CARD_POINTS
-    total += stats.red_cards * RED_CARD_POINTS
+    total += cards
     total += stats.own_goals * OWN_GOAL_POINTS
     total += defensive_contribution_points(position, stats)
     return total + stats.bonus

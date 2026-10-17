@@ -9,6 +9,13 @@ def test_did_not_play_scores_zero():
     assert points(Position.MID, MatchStats(minutes=0, bonus=0)) == 0
 
 
+@pytest.mark.parametrize(("yellow", "red", "expected"), [(1, 0, -1), (0, 1, -3)])
+def test_cards_count_for_unused_substitutes(yellow, red, expected):
+    # Booked on the bench: FPL deducts card points even with zero minutes.
+    stats = MatchStats(minutes=0, yellow_cards=yellow, red_cards=red)
+    assert points(Position.FWD, stats) == expected
+
+
 @pytest.mark.parametrize(
     ("minutes", "expected"),
     [(1, 1), (59, 1), (60, 2), (90, 2)],
