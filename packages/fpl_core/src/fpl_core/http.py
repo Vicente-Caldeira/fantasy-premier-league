@@ -5,7 +5,7 @@ refresh never hammers a service we don't own.
 """
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from types import TracebackType
 from typing import Self
 
@@ -28,13 +28,14 @@ class RetryingHttpClient:
         max_retries: int = 5,
         backoff_seconds: float = 1.0,
         user_agent: str = DEFAULT_USER_AGENT,
+        headers: Mapping[str, str] | None = None,
         transport: httpx.BaseTransport | None = None,
         sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self._client = httpx.Client(
             base_url=base_url,
             timeout=timeout,
-            headers={"User-Agent": user_agent},
+            headers={"User-Agent": user_agent, **(headers or {})},
             transport=transport,
             follow_redirects=True,
         )
