@@ -5,14 +5,21 @@ when the content actually changes. Upcoming fixtures (pre-match odds) are daily
 snapshots, like the FPL API.
 """
 
-from datetime import UTC, date, datetime
+from datetime import date
 
 import dagster as dg
 import polars as pl
 
 from fpl_core.http import RetryingHttpClient
 from fpl_pipelines.lake import Lake
-from fpl_pipelines.snapshots import current_season, daily_snapshots, seasons, take_snapshot
+from fpl_pipelines.snapshots import (
+    current_season,
+    daily_snapshots,
+    latest_version,
+    seasons,
+    store_version,
+    take_snapshot,
+)
 from fpl_pipelines.sources import football_data as fd
 
 BRONZE = ["bronze", "football_data"]
@@ -35,11 +42,6 @@ def upcoming_path(snapshot_date: str) -> str:
     return f"bronze/football_data/fixtures/snapshot_date={snapshot_date}/fixtures.csv"
 
 
-def latest_season_version(lake: Lake, season: str) -> str | None:
-    versions = lake.list(season_prefix(season))
-    return versions[-1] if versions else None
-
-
 @dg.asset(key_prefix=BRONZE, partitions_def=seasons, group_name="football_data_bronze")
 def season_results(
     context: dg.AssetExecutionContext, football_data: FootballDataResource, lake: Lake
@@ -48,18 +50,7 @@ def season_results(
     season = context.partition_key
     with football_data.client() as client:
         data = client.get(fd.season_path(season)).content
-
-    latest = latest_season_version(lake, season)
-    if latest is not None and lake.read_bytes(latest) == data:
-        return dg.MaterializeResult(metadata={"uri": lake.uri(latest), "changed": False})
-
-    # Microseconds keep versions distinct and lexicographically ordered by fetch time.
-    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%S%fZ")
-    path = f"{season_prefix(season)}/fetched_at={stamp}.csv"
-    lake.write_bytes(path, data)
-    return dg.MaterializeResult(
-        metadata={"uri": lake.uri(path), "bytes": len(data), "changed": True}
-    )
+    return store_version(lake, season_prefix(season), data, "csv")
 
 
 @dg.asset(key_prefix=BRONZE, partitions_def=daily_snapshots, group_name="football_data_bronze")
@@ -87,7 +78,7 @@ def upcoming_fixtures(
 def matches(context: dg.AssetExecutionContext, lake: Lake) -> pl.DataFrame:
     """Premier League results, match stats and opening/closing odds, one row per match."""
     season = context.partition_key
-    latest = latest_season_version(lake, season)
+    latest = latest_version(lake, season_prefix(season))
     if latest is None:
         raise dg.Failure(f"No bronze version for season {season}")
     return fd.parse_matches(lake.read_bytes(latest), season)
