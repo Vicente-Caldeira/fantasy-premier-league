@@ -62,3 +62,15 @@ def test_summary_has_quantiles_in_order():
     s = sim.simulate(rows, events, sim.SimulationSettings(draws=2000)).summary()
     assert (s["sim_p10"] <= s["sim_p50"]).all()
     assert (s["sim_p50"] <= s["sim_p90"]).all()
+
+
+def test_default_tail_settings_keep_the_mean_but_fatten_the_tail():
+    rows, events = fixture()
+    plain = sim.SimulationSettings(
+        draws=20000, bonus_returns_link=0.0, attack_dispersion_shape=None
+    )
+    p0 = sim.simulate(rows, events, plain).points
+    p1 = sim.simulate(rows, events, sim.SimulationSettings(draws=20000)).points
+    forward = 9
+    assert p1[:, forward].mean() == pytest.approx(p0[:, forward].mean(), abs=0.15)
+    assert (p1[:, forward] >= sim.HAUL).mean() > (p0[:, forward] >= sim.HAUL).mean()

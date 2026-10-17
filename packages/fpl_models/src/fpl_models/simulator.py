@@ -16,8 +16,8 @@ fixture are linked. Per draw:
     5. saves, bonus (capped at 3), yellow cards and defensive contributions from each
        player's expectation given that he plays
 
-Bonus and saves are drawn independently of goals; their real correlation with returns
-is ignored (a known simplification).
+Bonus can be tied to the draw's goals and assists (`bonus_returns_link`); saves are
+drawn independently of goals conceded (a known simplification).
 """
 
 from dataclasses import dataclass
@@ -57,7 +57,32 @@ class SimulationSettings:
     draws: int = 4000
     own_goal_rate: float = 0.03  # own goals per unit of team lambda
     defcon_on: bool = True  # defensive contributions score (2025-26 rules onwards)
+    # Bonus follows attacking returns: rate x exp(link x (goals + assists)), renormalised
+    # so each player's mean bonus is unchanged. 0 = independent of returns.
+    bonus_returns_link: float = 0.5
+    # Overdispersion of a player's attacking output (penalties, chance quality): his
+    # goal and assist rates share a Gamma(shape, 1/shape) multiplier per draw, so the
+    # mean is unchanged and the tail fattens. None = plain Poisson.
+    attack_dispersion_shape: float | None = 2.0
     seed: int = 0
+
+
+def _attacking_form(
+    rng: np.random.Generator, shape: float | None, size: tuple[int, int]
+) -> np.ndarray:
+    """Per player-draw multiplier on attacking rates: Gamma with mean 1 (None: 1)."""
+    if shape is None:
+        return np.ones(size)
+    form: np.ndarray = rng.gamma(shape, 1 / shape, size=size)
+    return form
+
+
+def _bonus_tilt(returns: np.ndarray, plays: np.ndarray, link: float) -> np.ndarray:
+    """exp(link x returns) per draw, scaled to average 1 over the draws a player plays."""
+    tilt: np.ndarray = np.exp(link * returns) * plays
+    per_appearance = tilt.sum(axis=0) / np.clip(plays.sum(axis=0), 1, None)
+    scaled: np.ndarray = tilt / np.clip(per_appearance, 1e-9, None)
+    return scaled
 
 
 def simulate(
@@ -94,7 +119,9 @@ def simulate(
     on = plays60 * 1.0 + sub * rng.uniform(*SUB_FRACTION, size=(draws, n))
     expected_on = p60 + p159 * float(np.mean(SUB_FRACTION))
 
-    goals = rng.poisson(events["e_goals_scored"].to_numpy() / np.clip(expected_on, 1e-9, None) * on)
+    form = _attacking_form(rng, settings.attack_dispersion_shape, (draws, n))
+    goal_rate = events["e_goals_scored"].to_numpy() / np.clip(expected_on, 1e-9, None)
+    goals = rng.poisson(goal_rate * on * form)
     team_lambda = rows.group_by(pl.Series(keys).alias("k")).agg(rows["team_lambda"].first())
     lam = np.zeros(len(teams))
     for k, value in team_lambda.iter_rows():
@@ -106,7 +133,7 @@ def simulate(
     # Assists rise and fall with the team's goals in each draw (mean preserved).
     goal_factor = team_goals[:, team] / np.clip(lam[team], 1e-9, None)
     assist_rate = events["e_assists"].to_numpy() / np.clip(expected_on, 1e-9, None)
-    assists = rng.poisson(assist_rate * on * goal_factor)
+    assists = rng.poisson(assist_rate * on * goal_factor * form)
 
     conceded = rng.binomial(team_goals[:, opponent].astype(np.int64), np.clip(on, 0, 1))
 
@@ -115,7 +142,8 @@ def simulate(
         return result
 
     saves = rng.poisson(given_play("e_saves"))
-    bonus = np.minimum(rng.poisson(given_play("e_bonus")), 3)
+    tilt = _bonus_tilt(goals + assists, plays, settings.bonus_returns_link)
+    bonus = np.minimum(rng.poisson(given_play("e_bonus") * tilt), 3)
     yellow = rng.random((draws, n)) < np.clip(given_play("e_yellow_cards"), 0, 1)
     p_defcon = np.clip(events["p_defcon"].to_numpy() / np.clip(p60, 1e-9, None), 0, 1)
     defcon = plays60 & (rng.random((draws, n)) < p_defcon)

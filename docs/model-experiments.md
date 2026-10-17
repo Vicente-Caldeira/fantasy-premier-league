@@ -99,6 +99,19 @@ FPL only has xG from 2022-23, so the two target variants are identical on 2021-2
 
 These totals aren't comparable to real managers' scores: no chips, and no in-season squad from GW1 history.
 
+## Simulator calibration (fit before 2022-23, simulate all of 2022-23)
+
+For player-gameweeks with a simulated mean of at least 2 (about 6,600):
+
+| Simulator | Mean pred / actual | p10–p90 coverage (target 80%) | P(haul ≥10) pred / actual | Brier skill vs base rate |
+|---|---|---|---|---|
+| Independent bonus, Poisson goals | 3.33 / 3.35 | 85.7% | 0.046 / 0.064 | 0.025 |
+| + bonus tied to returns (0.5) | 3.33 / 3.35 | 86.0% | 0.048 / 0.064 | 0.028 |
+| **+ gamma-mixed attacking rates (shape 2), now the default** | 3.34 / 3.34 | 86.2% | 0.050 / 0.064 | 0.032 |
+
+- **Means are calibrated.** The intervals are slightly too wide at the bottom: few players score below p10, because points are discrete and many sit at 1–2.
+- **Hauls are still under-predicted by about 20%.** Candidates: no penalty-taker or set-piece information, saves and clean-sheet bonus independent of the result, and no in-match game-state effects. That matters for captaincy, so the risk-aware captain work should wait for a fix or apply a calibration factor.
+
 ## Backlog (ranked by expected value)
 
 | Idea | Why it might help | Status |
