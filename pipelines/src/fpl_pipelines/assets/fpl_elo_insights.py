@@ -79,6 +79,25 @@ def cup_matches(context: dg.AssetExecutionContext, lake: Lake) -> pl.DataFrame:
     return pl.concat(frames).unique("match_id", keep="first").sort("kickoff_time")
 
 
+@silver_asset("cup_player_match_stats")
+def cup_player_match_stats(context: dg.AssetExecutionContext, lake: Lake) -> pl.DataFrame:
+    """Premier League players' stats in cup and European matches (2025-26 onwards;
+    empty before), for all-competition form and fatigue features."""
+    season = context.partition_key
+    refs = SOURCE.files(lake, season, src.CUP_PLAYER_STATS)
+    frames = [
+        src.parse_cup_player_match_stats(
+            SOURCE.read(lake, r), season, r.gameweek or 0, src.cup_name(r.path)
+        )
+        for r in refs
+    ]
+    if not frames:
+        header = ",".join([*src.PLAYER_KEYS, *src.PLAYER_COUNTS, *src.PLAYER_FLOATS])
+        return src.parse_cup_player_match_stats(f"{header}\n".encode(), season, 0, "")
+    # A match can be listed in two gameweek folders when its window is ambiguous.
+    return pl.concat(frames).unique(["match_id", "player_id"], keep="first")
+
+
 @dg.asset_check(asset=matches, blocking=True, partitions_def=elo_seasons)
 def full_fixture_list(matches: pl.DataFrame) -> dg.AssetCheckResult:
     duplicates = matches.height - matches["match_id"].n_unique()

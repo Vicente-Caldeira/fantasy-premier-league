@@ -117,3 +117,14 @@ models:
         data_tests: [not_null]
       - name: kickoff_utc
         data_tests: [not_null]
+  - name: fct_cup_player_matches
+    description: >
+      Premier League players' cup and European appearances (2025-26 onwards) with
+      kickoff and per-match stats: all-competition form and fatigue.
+    columns:
+      - name: player_code
+        data_tests: [not_null]
+      - name: kickoff_utc
+        data_tests: [not_null]
+      - name: minutes
+        data_tests: [not_null]

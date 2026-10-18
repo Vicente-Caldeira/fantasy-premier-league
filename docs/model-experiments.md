@@ -450,6 +450,48 @@ They're null where cup coverage is missing: before 2025-26, and after a season's
 - The model has barely any rows to learn rotation from. Training covers four seasons, but only the latest half-season has cup data. A premium player near a European match is also rare: 196 fixtures in all of 2025-26.
 - The data stays ingested and the features stay available. The test is worth repeating once 2026-27 is complete (two seasons with cup coverage). The ingested schedule can also feed the web app's fixture view directly.
 
+## E11b: a player's form and load across all competitions (rejected for now)
+
+**Data.** FPL-Elo-Insights also publishes the Premier League sides' player stats in every cup and European match (`By Tournament/<cup>/GW*/playermatchstats.csv`, same columns as the league files; `player_id` is the season's FPL element). It's ingested as `silver/fpl_elo_insights/cup_player_match_stats` → `fct_cup_player_matches`, one row per player per appearance, with the kickoff joined from `fct_cup_matches`.
+- 2025-26: 1,809 mapped appearances (of 2,586). The rest belong to matches without upstream kickoff times, mostly knockouts, so coverage ends in February.
+- 2026-27: 875 appearances (of 934).
+- 99.8% of appearances belong to the player's league club at the time.
+
+**Features** (`player_features.all_competition_features`). Everything is computed from matches kicking off strictly before the deadline, pooling league and cup appearances:
+
+| Group | Short (≤ 14 days) | Long (adds) |
+|---|---|---|
+| Fatigue (load) | minutes and minutes share (minutes ÷ 90 × club matches) over 7 and 14 days; last-match minutes; days since last appearance | minutes and share over 28 days and season-to-date |
+| Form | per-90 xG, xA, shots, box touches, chances created over 14 days; EWM per-90 with a 4-match half-life | 28 days, season-to-date, and EWM with a 15-match half-life |
+
+Every feature is null outside cup coverage: before 2025-26, and after a season's last recorded cup appearance plus 10 days.
+
+**Protocol.** As in E11, the primary window is 2026-27, and 2025-26 is a held-out season reported separately. `fpl_models.e11b` runs a walk-forward of each config against production on identical data, with a paired bootstrap per gameweek. The "after a cup game" rows are fixtures where the player played a cup or European match in the 6 days before kickoff, known at the deadline.
+
+| Config | Window | Δ regulars MAE | Δ captain/GW | Δ top-11/GW | Minutes log loss: all · after a cup game |
+|---|---|---|---|---|---|
+| fatigue (all windows) | 2026-27 | **−0.019 (−0.035, −0.004)** | −0.98 (−2.50, +0.33) | −0.05 (−3.5, +3.3) | 0.563 → **0.553** · 0.688 → **0.673** |
+| | 2025-26 | **+0.006 (+0.001, +0.010)** | +0.49 (−0.71, +1.76) | −1.55 (−3.9, +0.8) | 0.436 → 0.437 · 0.748 → 0.744 |
+| form (all windows) | 2026-27 | −0.008 (−0.027, +0.005) | −0.81 (−3.50, +1.00) | **−5.57 (−9.2, −2.0)** | 0.563 → 0.558 · 0.688 → 0.673 |
+| | 2025-26 | **+0.004 (+0.000, +0.008)** | −0.26 (−1.58, +0.87) | −2.02 (−4.8, +0.8) | 0.436 → 0.439 · 0.748 → 0.750 |
+| both, short only | 2026-27 | −0.013 (−0.033, +0.005) | −0.67 (−2.00, 0.00) | **−3.04 (−6.0, −0.7)** | 0.563 → 0.557 · 0.688 → 0.676 |
+| | 2025-26 | +0.001 (−0.003, +0.006) | +0.63 (−0.39, +1.74) | −1.95 (−4.4, +0.5) | 0.436 → 0.437 · 0.748 → 0.740 |
+| both, all windows | 2026-27 | −0.015 (−0.031, +0.001) | −0.67 (−2.00, 0.00) | −0.52 (−2.3, +1.3) | 0.563 → 0.556 · 0.688 → 0.672 |
+| | 2025-26 | **+0.007 (+0.002, +0.012)** | −1.18 (−2.58, +0.11) | −1.00 (−4.0, +2.0) | 0.436 → 0.439 · 0.748 → 0.749 |
+
+- **No config helps in both windows, so production is unchanged.**
+  - In 2026-27, fatigue improves MAE and the minutes model, including after cup games.
+  - On 2025-26 the same features make MAE slightly *worse*, and no config improves the top 11 anywhere.
+  - Expected-points absolute error on the after-a-cup-game rows is 0.005–0.046 worse for every config in both seasons.
+- **Ablation: longer windows don't consistently add information.**
+  - All windows vs short only: 2026-27 top-11 is −0.5 vs −3.0 (better), but 2025-26 MAE is +0.007 vs +0.001 and captain −1.18 vs +0.63 (worse).
+  - The differences sit within each other's intervals.
+- **Power is the limit.**
+  - 2026-27 has 6 scored gameweeks (3,883 fixtures, 546 after a cup game). Top-11 intervals span about ±3.5 points per gameweek, so only large effects show.
+  - 2025-26 has 38 gameweeks but only 1,832 after-a-cup rows, and the walk-forward model trains on at most one partial season with cup data.
+  - The trees see these columns non-null in at most 18% of training rows (by the end of 2025-26) and 26% (2026-27).
+- **What would change the call:** re-run at the end of 2026-27 (two seasons of coverage). Also try the load features in the minutes model only, where 2026-27 shows the clearest signal, rather than in every component. The data and features stay in place.
+
 ## Tried and rejected
 
 | Change | Tuning-season result | Decision |

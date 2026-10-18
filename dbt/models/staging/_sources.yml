@@ -88,3 +88,7 @@ sources:
         meta:
           external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/fpl_elo_insights/cup_matches/*/data.parquet', hive_partitioning = false, union_by_name = true)"
           dagster: {asset_key: [silver, fpl_elo_insights, cup_matches]}
+      - name: cup_player_match_stats
+        meta:
+          external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/fpl_elo_insights/cup_player_match_stats/*/data.parquet', hive_partitioning = false, union_by_name = true)"
+          dagster: {asset_key: [silver, fpl_elo_insights, cup_player_match_stats]}
