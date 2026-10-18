@@ -1,0 +1,41 @@
+name: Daily snapshot
+
+# FPL prices, news and upcoming odds exist only as current state: a missed day is lost.
+# Mirrors the Dagster schedule (06:00 UTC, after overnight price changes).
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: daily-snapshot
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  snapshot:
+    if: github.repository == 'Vicente-Caldeira/fantasy-premier-league'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      FPL_LAKE_URL: ${{ vars.FPL_LAKE_URL }}
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.3.0
+        with:
+          enable-cache: true
+      - run: uv sync --frozen --package fpl-pipelines
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_LAKE_SA }}
+      - name: Snapshot today's partition
+        run: |
+          export DAGSTER_HOME="$RUNNER_TEMP/dagster"
+          mkdir -p "$DAGSTER_HOME"
+          uv run --package fpl-pipelines dagster job execute -m fpl_pipelines.definitions \
+            -j daily_snapshot --tags "{\"dagster/partition\": \"$(date -u +%F)\"}"
