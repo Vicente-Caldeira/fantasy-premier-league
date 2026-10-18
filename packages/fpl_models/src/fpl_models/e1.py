@@ -21,13 +21,19 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from fpl_models import experiments, optimizer, player_features, player_model, team_strength
+from fpl_models import experiments, optimizer, player_model, team_strength
 from fpl_models.data import DEFAULT_WAREHOUSE, load_player_matches, player_gameweeks
 from fpl_models.season_sim import SeasonSimulator, Week, play
 
 OUT = Path("data/experiments/e1")
 PATHS = 20
-CONFIGS = {"v1": experiments.EXPERIMENTS["baseline"], "v2": player_model.PRODUCTION}
+# "v2fix": production prepared after the 2022-23 zero-xG fix ("v2" paths predate it).
+CONFIGS = {
+    "v1": experiments.EXPERIMENTS["baseline"],
+    "v2": player_model.PRODUCTION,
+    "v2fix": player_model.PRODUCTION,
+    "v2pen": experiments.EXPERIMENTS["r5_penalties"],
+}
 SETTINGS = optimizer.Settings(time_limit_seconds=30)
 DETECT = 50  # points of season-total difference we want to be able to detect
 
@@ -40,11 +46,7 @@ def weeks_path(config: str, season: str, horizon: int = 3) -> Path:
 def _prepare(job: tuple[str, str, int]) -> str:
     config, season, horizon = job
     matches = team_strength.load_matches(DEFAULT_WAREHOUSE)
-    features = player_features.build_features(
-        player_features.load_fixture_rows(DEFAULT_WAREHOUSE),
-        player_features.match_lambdas(matches),
-        player_features.schedule_features(matches),
-    )
+    features = experiments.load_features(DEFAULT_WAREHOUSE)
     truth = player_gameweeks(load_player_matches(DEFAULT_WAREHOUSE))
     sim = SeasonSimulator(
         features, truth, matches, CONFIGS[config], horizon=horizon, settings=SETTINGS

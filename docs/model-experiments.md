@@ -295,14 +295,70 @@ By segment:
 - **Players new to the league are not a problem.** Their error share is below their row share, so a hierarchical prior for low-history players (planned item 8) isn't justified.
 - **Premium players are under-predicted by 0.8 points per gameweek, and 0.9 at ≥ 10.0m.** Of that, 0.50 is goals and 0.15 is assists. Every one of the ten largest season under-predictions is an elite attacker: Haaland 2022-23 had 12.3 expected goals and scored 36; Kane had 10.7 and scored 30.
 - **A data bug explains part of it (confirmed below by re-running).** FPL first published expected stats at 2022-23 GW16, and the vaastav history carries **0.0 xG for every player in GW1–15**, not null. With `denoise_weight = 1.0`, v2 learned 15 weeks of "nobody was expected to score", and the xG-per-90 features were deflated the same way. Kane's FPL xG for 2022-23 sums to only 12.0 for that reason. **Fix:** `stg_vaastav__player_matches` nulls the expected stats of any gameweek with no xG published league-wide. The dbt test `assert_expected_stats_missing_not_zero` guards it. The training targets then fall back to actual goals for those weeks. This affects every result trained on 2022-23: the tuning season itself, and the held-out seasons through their 4-season window. The production baseline is re-scored on the fixed data below.
-- **Two shrinkage settings are also tested (E9):** `min_samples_leaf = 100` was chosen on MAE, which barely sees the tail.
+- **Re-recorded on the fixed data, the premium bias halves and the overall goals bias almost vanishes:**
+
+  | | Zero-xG data | Fixed |
+  |---|---|---|
+  | Premium bias (pts/GW) | −0.80 | **−0.37** |
+  | Goals bias, all regulars | −0.089 | **−0.016** |
+  | MSE | 7.65 | **7.52** |
+  | MAE | 1.806 | 1.826 |
+
+  Squared error falls but absolute error rises. That's the skew effect from E5: points are right-skewed, so better-calibrated, higher predictions cost MAE. The decision metrics and season simulation decide whether the fix helps decisions.
+- **Two shrinkage settings are also tested (E9)** against the remaining premium bias: `min_samples_leaf = 100` was chosen on MAE, which barely sees the tail.
 - "Back from absence" doesn't occur among regulars (they play by definition), so it isn't shown.
 
-<!-- E3A -->
+## Fixed-data baseline and E3a: last season's penalty taking (rejected)
 
-<!-- E9 -->
+After the zero-xG fix (E8), production (`r4_xg_1`) was re-scored on the tuning seasons. The comparison below is fixed vs zero-xG data, per gameweek, with a paired bootstrap:
 
-<!-- E4A-OOS -->
+| | Δ regulars MAE | Δ captain pts/GW | Δ top-11 pts/GW |
+|---|---|---|---|
+| Fixed vs zero-xG data | +0.020 (+0.010, +0.031) | +0.32 (−0.67, +1.43) | +1.39 (−0.96, +3.92) |
+
+MAE rises, as E8 predicted for less-shrunk, better-calibrated predictions. The decision metrics lean positive but are within noise. A data fix doesn't need to "win" to be adopted, but season simulation checks it doesn't hurt decisions. **It clearly helps: +58.4 points per season (95% CI +33.1, +83.7)**, with 30 paths per season and v2 prepared on fixed vs zero-xG data. That's about as large as the whole v1 → v2 upgrade (+59). Under-predicting the elite attackers was costing real picks and captaincies.
+
+**E3a features** (`fpl_models.penalties`). Understat publishes penalty xG only as season totals (xG − npxG), so a fixture in season S uses season S−1:
+- `penalty_xg_prev90`: the player's penalty xG per 90 last season, at any club, with at least 270 minutes;
+- `penalty_share_prev`: his share of his club's penalty xG last season, if he's still at the same club (otherwise 0).
+
+Understat has no FPL ID, so players are matched by name within club and season. A token-subset rule handles FPL's legal names ("Bruno Miguel Borges Fernandes"), and ambiguous names are skipped. The match covers 96–100% of penalty xG in every season from 2016-17.
+
+Against production on the fixed data:
+
+| Variant | Δ regulars MAE | Δ captain pts/GW | Δ top-11 pts/GW |
+|---|---|---|---|
+| both features | −0.0006 (−0.0021, +0.0010) | +0.60 (−0.31, +1.57) | **+1.50 (+0.03, +3.01)** |
+| share only | −0.0014 (−0.0028, 0.0000) | +0.66 (−0.36, +1.71) | +1.21 (−0.27, +2.84) |
+
+- **This is the first feature since the crowd signal with a significant decision gain.** Penalties are rare, so MAE barely moves, but they concentrate on the few players the optimiser picks and captains.
+- **Season simulation rejects it: −21.4 points per season (95% CI −45.7, +3.2)** vs production on the fixed data, with 30 paths per season. The top-11 gain doesn't survive the squad constraints, transfers and captaincy, so penalties stay out of production. Last season's penalty share is a stale signal (takers change), and the optimiser may over-trust it.
+- Mid-season changes of penalty taker aren't seen. Live bootstrap data has `penalties_order`, and the daily snapshots will allow a within-season version later.
+
+## E9: less shrinkage for the elite tail (rejected)
+
+| Variant | Δ regulars MAE | Δ captain pts/GW | Δ top-11 pts/GW |
+|---|---|---|---|
+| `min_samples_leaf` 30 (from 100) | −0.0004 (−0.0022, +0.0014) | +0.33 (−0.68, +1.25) | +0.69 (−1.24, +2.75) |
+| `max_iter` 800 (from 400) | −0.0001 | 0.00 | −0.16 (−0.48, 0.00) |
+
+- **Neither helps.** After the xG fix, the remaining premium bias isn't a leaf-size effect.
+- **More iterations do nothing, because training already stops early.** `HistGradientBoosting*` enable early stopping automatically above 10,000 rows (`early_stopping="auto"`: a 10% validation split and 10 rounds of patience). A production fit on 2018-22 stops after 234 iterations for minutes and 134–176 for the count models (goals 146, assists 134), so `max_iter` and part of `learning_rate` were never the binding settings. That's worth knowing for any future hyperparameter search.
+
+## E4a out of sample: chip thresholds on 2018-19 and 2020-21
+
+E4a's thresholds were fixed before this run (`e4.PRE_REGISTERED`) and scored on two seasons never used for tuning: 20 v2 paths each, the same 2025-26 chip rules, and no xG in either season. 2019-20 is skipped because of its COVID gameweek numbering. "Blind" plays the chip in the half's last gameweek.
+
+| Chip | Blind | Pre-registered rule | Rule − blind | Tuning seasons: rule − blind |
+|---|---|---|---|---|
+| Triple captain (captain xP ≥ 10) | +19.4 | +18.9 | **−0.5** | +11.6 |
+| Bench boost (bench xP ≥ 10) | +11.3 | +17.7 | **+6.4** | +9.8 |
+| Free hit (≥ 20 xP above current XI) | +27.3 | +27.3 | **0.0** | +0.5 |
+| All three | | +51.4 per season | | +76.8 |
+
+- **The bench-boost rule holds up out of sample (+6). The triple-captain rule doesn't (−0.5).** It wasn't diagnosed why. One possibility is that the end-of-half gameweeks in these seasons were themselves strong captain weeks. The free-hit rule never beat blind in either period: the chip is worth a fresh squad wherever it's played.
+- **What to use:** play the bench boost in a double gameweek with bench xP ≥ 10. The triple-captain threshold isn't supported; keep it as a weak preference for double gameweeks, not a rule. The free hit can be played whenever convenient (blank gameweeks in practice, which this budget-approximate simulator doesn't model).
+- The intervals (path bootstrap) are omitted for the same reason as in E4a: each season-half is effectively one decision.
 
 ## Tried and rejected
 
