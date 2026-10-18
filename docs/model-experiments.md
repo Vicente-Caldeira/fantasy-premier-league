@@ -97,6 +97,17 @@ No chips are used.
 
 FPL only has xG from 2022-23, so the two target variants are identical on 2021-22. **+7 points on one season is noise.** Per-gameweek metrics favour pure xG on MAE and the blend on decisions, a wash, so the simpler **pure xG** is kept.
 
+**Optimiser settings** (v2 model):
+
+| Setting | 2021-22 | 2022-23 | Total | Hits |
+|---|---|---|---|---|
+| **hit cost 4 when deciding, 3-GW horizon (default)** | 2184 | 2228 | **4412** | 60 |
+| hit cost 6 | 2056 | 2345 | 4401 | 21 |
+| hit cost 8 | 1990 | 2256 | 4246 | 9 |
+| 5-GW horizon | 2250 | 2128 | 4378 | 66 |
+
+Defaults kept. Heavy hit aversion costs points. Single-season paths swing by ±120, so differences under ~150 points are noise: one path per season is a weak test. **Next:** many paths per setting (different starting gameweeks or squads) to tighten it.
+
 These totals aren't comparable to real managers' scores: no chips, and no in-season squad from GW1 history.
 
 ## Held-out evaluation (run once: 2023-24, 2024-25, 2025-26)
