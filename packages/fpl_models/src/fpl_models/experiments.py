@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from fpl_models import player_features, player_model, team_strength
+from fpl_models import penalties, player_features, player_model, team_strength
 from fpl_models.backtest import run_backtest
 from fpl_models.data import DEFAULT_WAREHOUSE, load_player_matches, player_gameweeks
 from fpl_models.leaderboard import EVALUATION_SEASONS
@@ -100,6 +100,37 @@ EXPERIMENTS |= {
     ),
 }
 
+# Round 5 (E3a): last season's penalty taking, against production (= r4_xg_1).
+EXPERIMENTS |= {
+    "r5_penalties": replace(
+        player_model.PRODUCTION,
+        features=player_model.PRODUCTION.features + penalties.PENALTY_FEATURES,
+    ),
+    "r5_penalty_share": replace(
+        player_model.PRODUCTION,
+        features=(*player_model.PRODUCTION.features, "penalty_share_prev"),
+    ),
+}
+
+# Round 6 (E9): E8 found elite attackers' goals heavily under-predicted (Haaland
+# 2022-23: 12.3 expected, 36 scored); min_samples_leaf=100 was chosen on MAE, which
+# barely sees the tail. Less shrinkage, against production.
+EXPERIMENTS |= {
+    "r6_leaf30": replace(player_model.PRODUCTION, min_samples_leaf=30),
+    "r6_iter800": replace(player_model.PRODUCTION, max_iter=800),
+}
+
+
+def load_features(warehouse: Path) -> pl.DataFrame:
+    """Every candidate feature: fixture rows, team context, schedule and penalties."""
+    matches = team_strength.load_matches(warehouse)
+    features = player_features.build_features(
+        player_features.load_fixture_rows(warehouse),
+        player_features.match_lambdas(matches),
+        player_features.schedule_features(matches),
+    )
+    return penalties.add_penalties(features, penalties.season_table(*penalties.load(warehouse)))
+
 
 def per_gameweek(predictions: pl.DataFrame, gameweeks: pl.DataFrame) -> pl.DataFrame:
     """Per-gameweek sufficient statistics, so differences can be bootstrapped."""
@@ -154,12 +185,7 @@ def run(names: list[str], warehouse: Path, *, held_out: bool = False) -> pl.Data
     final candidate only, after every choice has been made on the tuning seasons."""
     seasons = EVALUATION_SEASONS if held_out else TUNING_SEASONS
     results = RESULTS_DIR / "held_out" if held_out else RESULTS_DIR
-    matches = team_strength.load_matches(warehouse)
-    features = player_features.build_features(
-        player_features.load_fixture_rows(warehouse),
-        player_features.match_lambdas(matches),
-        player_features.schedule_features(matches),
-    )
+    features = load_features(warehouse)
     gameweeks = player_gameweeks(load_player_matches(warehouse))
     results.mkdir(parents=True, exist_ok=True)
     rows = []

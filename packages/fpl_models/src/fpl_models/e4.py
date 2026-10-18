@@ -18,8 +18,10 @@ budget is 100.0m, not the path's own squad value (which drifts by a few million)
     uv run python -m fpl_models.e4
 """
 
+import argparse
 import json
 import pickle
+from collections.abc import Sequence
 from dataclasses import replace
 
 import numpy as np
@@ -56,10 +58,10 @@ def free_hit_squads(weeks: list[Week]) -> dict[int, tuple[float, int]]:
     return out
 
 
-def signals(config: str = "v2") -> pl.DataFrame:
+def signals(config: str = "v2", seasons: Sequence[str] = TUNING_SEASONS) -> pl.DataFrame:
     """Per path-gameweek: each chip's signal and the extra points it would have scored."""
     rows = []
-    for season in TUNING_SEASONS:
+    for season in seasons:
         weeks: list[Week] = pickle.loads(e1.weeks_path(config, season).read_bytes())  # noqa: S301
         by_gw = {w.gameweek: w for w in weeks}
         free_hit = free_hit_squads(weeks)
@@ -154,10 +156,28 @@ def combined(data: pl.DataFrame, best: dict[str, float]) -> pl.DataFrame:
     return pl.DataFrame(out)
 
 
+# Chosen on the tuning seasons (docs/model-experiments.md, E4a), fixed before any
+# out-of-sample check.
+PRE_REGISTERED = {"triple_captain": 10.0, "bench_boost": 10.0, "free_hit": 20.0}
+
+
 def main() -> None:
-    data = signals()
-    data.write_parquet(e1.OUT / "e4_signals.parquet")
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--seasons", nargs="+", default=list(TUNING_SEASONS))
+    args = parser.parse_args()
+    out_of_sample = tuple(args.seasons) != TUNING_SEASONS
+    data = signals(seasons=args.seasons)
+    name = "e4_signals_oos" if out_of_sample else "e4_signals"
+    data.write_parquet(e1.OUT / f"{name}.parquet")
     result = evaluate(data)
+    if out_of_sample:
+        with pl.Config(tbl_rows=40, float_precision=1):
+            print(result)
+        both = combined(data, PRE_REGISTERED)
+        gain = both["gain"].to_numpy()
+        print(f"pre-registered {PRE_REGISTERED}, seasons {args.seasons}: all three chips "
+              f"{gain.mean():+.1f} per season (sd {gain.std(ddof=1):.1f})")  # fmt: skip
+        return
     with pl.Config(tbl_rows=40, float_precision=1):
         print(result)
     best = {

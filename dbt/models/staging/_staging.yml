@@ -21,6 +21,12 @@ models:
         data_tests: [not_null]
       - name: away_team_key
         data_tests: [not_null]
+  - name: stg_understat__player_seasons
+    columns:
+      - name: understat_player_id
+        data_tests: [not_null]
+      - name: penalty_xg
+        data_tests: [not_null]
   - name: stg_understat__team_matches
     columns:
       - name: team_key

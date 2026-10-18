@@ -95,3 +95,15 @@ models:
         data_tests: [unique, not_null]
       - name: deadline_utc
         data_tests: [not_null]
+
+  - name: fct_understat_player_seasons
+    description: Understat season totals per player, with penalty xG (xG - npxG) and goals.
+    columns:
+      - name: understat_player_id
+        data_tests: [not_null]
+
+  - name: dim_player_seasons
+    description: One row per FPL player and season, with club and names.
+    columns:
+      - name: team_key
+        data_tests: [not_null]

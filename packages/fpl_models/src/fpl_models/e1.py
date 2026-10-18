@@ -15,7 +15,7 @@ import argparse
 import json
 import pickle
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import asdict
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 import numpy as np
@@ -54,13 +54,32 @@ def _prepare(job: tuple[str, str, int]) -> str:
     return f"prepared {config} horizon {horizon} {season}: {len(weeks)} gameweeks"
 
 
-def _play(job: tuple[str, str, int, int, float, str]) -> str:
-    config, season, horizon, seed, hit_penalty, label = job
+@dataclass(frozen=True)
+class Job:
+    config: str
+    season: str
+    horizon: int
+    seed: int
+    hit_penalty: float
+    label: str
+    wildcards: tuple[int, ...] = ()
+    wildcard_threshold: float | None = None
+
+
+def path_file(label: str, season: str, seed: int) -> Path:
+    return OUT / "paths" / f"{label}_{season}_{seed:02d}.json"
+
+
+def _play(job: Job) -> str:
+    config, season, horizon, seed, label = job.config, job.season, job.horizon, job.seed, job.label
     cached = weeks_path(config, season, horizon).read_bytes()
     weeks: list[Week] = pickle.loads(cached)  # noqa: S301 - our own cache file
-    settings = optimizer.Settings(time_limit_seconds=30, hit_penalty=hit_penalty)
-    result, records = play(season, weeks, settings, seed=seed)
-    path = OUT / "paths" / f"{label}_{season}_{seed:02d}.json"
+    settings = optimizer.Settings(time_limit_seconds=30, hit_penalty=job.hit_penalty)
+    result, records = play(
+        season, weeks, settings, seed=seed, wildcards=job.wildcards,
+        wildcard_threshold=job.wildcard_threshold,
+    )  # fmt: skip
+    path = path_file(label, season, seed)
     path.write_text(json.dumps([asdict(r) for r in records]))
     return f"{label} {season} seed {seed}: {result.total} points, {sum(result.hits)} hits"
 
@@ -139,11 +158,15 @@ def main() -> None:
     parser.add_argument("--hit-penalty", type=float, default=float(optimizer.HIT_COST))
     parser.add_argument("--seeds", type=int, nargs=2, default=(0, PATHS), metavar=("FROM", "TO"))
     parser.add_argument("--label", help="name for these paths (default: the config)")
+    parser.add_argument("--wildcards", type=int, nargs="*", default=[], help="gameweeks")
+    parser.add_argument("--wildcard-threshold", type=float)
+    parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--labels", nargs="+", default=[])
     parser.add_argument("--against", default="v2")
+    parser.add_argument("--seasons", nargs="+", default=list(experiments.TUNING_SEASONS))
     args = parser.parse_args()
     (OUT / "paths").mkdir(parents=True, exist_ok=True)
-    seasons = experiments.TUNING_SEASONS
+    seasons = args.seasons
     if args.stage == "prepare":
         jobs = [(c, s, args.horizon) for c in args.configs for s in seasons]
         with ProcessPoolExecutor(len(jobs)) as pool:
@@ -151,11 +174,22 @@ def main() -> None:
                 print(line, flush=True)
     elif args.stage == "play":
         plays = [
-            (c, s, args.horizon, seed, args.hit_penalty, args.label or c)
+            Job(
+                c,
+                s,
+                args.horizon,
+                seed,
+                args.hit_penalty,
+                args.label or c,
+                tuple(args.wildcards),
+                args.wildcard_threshold,
+            )
             for seed in range(*args.seeds)
             for c in args.configs
             for s in seasons
         ]
+        if args.skip_existing:  # resume an interrupted run
+            plays = [j for j in plays if not path_file(j.label, j.season, j.seed).exists()]
         with ProcessPoolExecutor(args.workers) as pool:
             for line in pool.map(_play, plays):
                 print(line, flush=True)

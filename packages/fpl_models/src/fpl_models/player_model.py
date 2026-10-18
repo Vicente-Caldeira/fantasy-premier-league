@@ -296,6 +296,23 @@ class ComponentModel:
     _fitted_at: int = field(default=-(10**9), repr=False)
 
     def predict(self, history: pl.DataFrame, targets: pl.DataFrame) -> pl.Series:
+        rows, events = self.fixture_events(history, targets)
+        points = expected_points(rows, events)
+        per_player = (
+            rows.select("player_code")
+            .with_columns(points)
+            .group_by("player_code")
+            .agg(pl.col("expected_points").sum())
+        )
+        return targets.join(per_player, on="player_code", how="left", maintain_order="left")[
+            "expected_points"
+        ].fill_null(0.0)
+
+    def fixture_events(
+        self, history: pl.DataFrame, targets: pl.DataFrame
+    ) -> tuple[pl.DataFrame, pl.DataFrame]:
+        """The target gameweek's fixture rows and their expected events (refits first
+        when due)."""
         deadline = targets["deadline_utc"][0]
         season, gameweek = targets["season"][0], targets["gameweek"][0]
         step = self._step(deadline)
@@ -313,16 +330,7 @@ class ComponentModel:
         events = self._fitted.components(rows)
         if self.config.reconcile and self._fitted.team_rates:
             events = reconcile(rows, events, self._fitted.team_rates)
-        points = expected_points(rows, events)
-        per_player = (
-            rows.select("player_code")
-            .with_columns(points)
-            .group_by("player_code")
-            .agg(pl.col("expected_points").sum())
-        )
-        return targets.join(per_player, on="player_code", how="left", maintain_order="left")[
-            "expected_points"
-        ].fill_null(0.0)
+        return rows, events
 
     def _step(self, deadline: object) -> int:
         order = self.features.select("deadline_utc").unique().sort("deadline_utc")["deadline_utc"]

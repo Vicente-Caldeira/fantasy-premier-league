@@ -220,7 +220,7 @@ The 2025-26 rules: each chip once per half, one chip per gameweek. A rule plays 
 - **The free hit is worth about 42 points wherever it's played.** A fresh optimal one-week squad beats a squad built up over months by about 20 points, so its timing barely matters here. It's limited by the 100.0m budget approximation, which is conservative because real squad values rise.
 - **Caveat 1: the intervals are too narrow, so they aren't shown.** The paths share the same gameweeks, so in each season-half there is effectively one decision. Two seasons give 4 halves.
 - **Caveat 2: the thresholds are chosen and scored on the same paths, so the gains are optimistic.** They need confirming on the held-out seasons before anyone relies on them.
-- **Wildcard:** E4b, which needs new paths.
+- **Wildcard:** see E4b.
 
 ## E5: position calibration (rejected)
 
@@ -235,6 +235,74 @@ Walk-forward isotonic maps (predicted → actual), refitted every 4 gameweeks on
 - **MAE punishes mean calibration:** points are right-skewed (mean > median), so moving predictions toward the conditional mean raises absolute error. The decision metrics are the relevant test, and they show no gain.
 - **The isotonic maps overfit the sparse top end:** high-predicted goalkeepers went 6.28 → 7.89 against 5.86 actual.
 - **The bias was smaller than first measured:** with true walk-forward predictions, high-predicted defenders run 5.73 vs 5.58 actual (−3%, not −5%).
+
+## E7: hit cost and planning horizon (rejected)
+
+These are optimiser settings, played on v2's E1 paths. The baseline uses a hit penalty of 4 (the true cost) and a 3-gameweek horizon. Each result is vs v2 with 30 paths per season and an unpaired bootstrap.
+
+| Setting | Δ points per season (95% CI) | Hits per season |
+|---|---|---|
+| Hit penalty 5 when deciding (scoring still −4) | +9.4 (−20.2, +38.6) | 20.4 |
+| Hit penalty 6 | +2.7 (−31.2, +37.2) | 12.1 |
+| Horizon 5 gameweeks | **−113.4 (−142.5, −84.7)** | 64.6 |
+
+- **A dearer hit isn't measurably better.** It halves the hits, but the points stay within noise. The true cost (4) stays.
+- **Horizon 5 is clearly worse.** Predictions 4–5 weeks out are flat (form features don't extend that far), so the planner chases small far-off gains with hits now. Part of the gap may come from the larger MIP hitting its 30 s time limit under heavy CPU load.
+- **Bug found and fixed:** future free transfers were only upper-bounded in the MIP. That was exact at the optimum but not in time-limited solutions, and one horizon-5 path broke the rules (13 transfers, 5 free, 12 hits). The rollover is now exact: `ft[t+1] = min(ft[t] − used + earned, 5)`, modelled with a binary.
+
+## E4b: wildcard timing
+
+The 2025-26 rule is one wildcard per half. In a wildcard week the squad is rebuilt freely: no hits, banked free transfers are kept, and that week earns no +1. Fixed-week rules play the wildcard in the given gameweek of each half. Threshold rules play it when rebuilding beats the normal plan by at least T expected points over the horizon. Each result is vs v2 without a wildcard, with 20 paths per season.
+
+| Rule | Δ points per season (95% CI) | Hits per season |
+|---|---|---|
+| GW 8 and 24 | +33.0 (+6.4, +59.8) | 26.5 |
+| GW 12 and 28 | +55.9 (+22.9, +89.6) | 31.2 |
+| GW 16 and 32 | +39.2 (+12.5, +65.5) | 29.3 |
+| rebuild gain ≥ 10 xP | +30.4 (+2.7, +57.8) | 30.7 |
+| **rebuild gain ≥ 20 xP** | **+71.6 (+39.9, +101.8)** | 27.1 |
+
+- **Every rule beats no wildcard.** Two free rebuilds a season are worth 30–70 points.
+- **Waiting for a large gain (≥ 20 xP) works best.** A low threshold spends the chip on the first modest opportunity. The rules overlap within their intervals, and the threshold was picked on these paths, so the +72 is optimistic. Like E4a's thresholds, it needs out-of-sample confirmation.
+- The no-wildcard baseline paths were played before the free-transfer fix (E7). That makes a difference only for time-limited solutions.
+
+## E8: where does v2's error come from?
+
+On the regulars of 2021-23 (26,060 player-gameweeks, MAE 1.806, MSE 7.65), each component's points error splits into a **minutes** part (predicted minus predicted-rescaled-to-actual-minutes) and a **returns** part (the rest). The squared error then decomposes exactly as `MSE = Σ cov(e_part, e)` (`fpl_models.e8`).
+
+| Part | Share of MSE |
+|---|---|
+| goals (given minutes) | 31.9% |
+| bonus | 15.0% |
+| clean sheets | 14.4% |
+| appearance (minutes class) | 11.8% |
+| assists | 11.0% |
+| other minutes parts (clean sheet, goals, bonus, assists) | 10.9% |
+| conceding, cards, saves | 4.8% |
+| other (penalties, own goals, approximations) | 1.8% |
+| **minutes overall / returns overall** | **21.0% / 77.2%** |
+
+By segment:
+
+| Segment | Share of rows | Share of abs error | MAE | Bias (pred − actual) |
+|---|---|---|---|---|
+| new (< 6 GWs of history) | 3.4% | 2.7% | 1.43 | −0.15 |
+| premium (≥ 9.0m) | 2.7% | 5.1% | 3.44 | **−0.80** |
+| predicted ≥ 5 | 3.8% | 7.9% | 3.75 | +0.28 |
+| GKP / DEF / MID / FWD | 6 / 35 / 46 / 13% | 8 / 38 / 41 / 14% | 2.17 / 1.95 / 1.62 / 1.92 | −0.17 / −0.04 / −0.22 / −0.23 |
+
+- **For regulars, most error is in the returns, not the minutes.** Goals, bonus and clean sheets are mostly irreducible noise, but part of it is a fixable bias (below). Minutes dominate over *all* players (rotation and injuries), but regulars are what the optimiser picks.
+- **Players new to the league are not a problem.** Their error share is below their row share, so a hierarchical prior for low-history players (planned item 8) isn't justified.
+- **Premium players are under-predicted by 0.8 points per gameweek, and 0.9 at ≥ 10.0m.** Of that, 0.50 is goals and 0.15 is assists. Every one of the ten largest season under-predictions is an elite attacker: Haaland 2022-23 had 12.3 expected goals and scored 36; Kane had 10.7 and scored 30.
+- **A data bug explains part of it (confirmed below by re-running).** FPL first published expected stats at 2022-23 GW16, and the vaastav history carries **0.0 xG for every player in GW1–15**, not null. With `denoise_weight = 1.0`, v2 learned 15 weeks of "nobody was expected to score", and the xG-per-90 features were deflated the same way. Kane's FPL xG for 2022-23 sums to only 12.0 for that reason. **Fix:** `stg_vaastav__player_matches` nulls the expected stats of any gameweek with no xG published league-wide. The dbt test `assert_expected_stats_missing_not_zero` guards it. The training targets then fall back to actual goals for those weeks. This affects every result trained on 2022-23: the tuning season itself, and the held-out seasons through their 4-season window. The production baseline is re-scored on the fixed data below.
+- **Two shrinkage settings are also tested (E9):** `min_samples_leaf = 100` was chosen on MAE, which barely sees the tail.
+- "Back from absence" doesn't occur among regulars (they play by definition), so it isn't shown.
+
+<!-- E3A -->
+
+<!-- E9 -->
+
+<!-- E4A-OOS -->
 
 ## Tried and rejected
 

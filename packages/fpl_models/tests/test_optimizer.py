@@ -259,3 +259,16 @@ def test_wildcard_week_earns_no_extra_free_transfer():
     players = pool(seed=6)
     plan = solve(players, xp(players, gameweeks=(1, 2)), free_transfers=1)
     assert plan.gameweeks[1].free_transfers == 1
+
+
+def test_wildcard_chip_rebuilds_an_existing_squad_without_hits():
+    players = pool(seed=7)
+    squad = cheapest_valid_squad(players)
+    points = xp(players, gameweeks=(1, 2))
+    normal = solve(players, points, current_squad=squad, bank=250, free_transfers=1)
+    chip = solve(players, points, current_squad=squad, bank=250, free_transfers=2, wildcard=True)
+    first = chip.gameweeks[0]
+    assert len(first.transfers_in) > 2
+    assert first.hits == 0
+    assert chip.gameweeks[1].free_transfers == 2  # banked transfers kept, none earned
+    assert chip.gameweeks[0].expected_points > normal.gameweeks[0].expected_points

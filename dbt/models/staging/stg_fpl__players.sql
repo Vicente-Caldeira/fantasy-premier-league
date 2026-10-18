@@ -6,6 +6,7 @@ select
     code as player_code,
     element_type,
     team as fpl_team_id,
+    team_code,
     web_name,
     first_name,
     second_name,
