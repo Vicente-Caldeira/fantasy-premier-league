@@ -1,3 +1,6 @@
+import numpy as np
+import polars as pl
+
 from fpl_models import optimizer
 from fpl_models import season_sim as ss
 
@@ -50,3 +53,58 @@ def test_captain_doubled_and_vice_takes_over_when_captain_misses():
         sum(actual_missing[p] for p in LINEUP if p != 9) + actual_missing[15] + actual_missing[10]
     )
     assert ss.score(gameweek(), [12, 13, 14, 15], actual_missing, played(9), POSITION) == expected
+
+
+def synthetic_players(seed=1):
+    """Five per position, with cheap enablers so a valid squad always exists."""
+    rng = np.random.default_rng(seed)
+    rows = []
+    for position in ("GKP", "DEF", "MID", "FWD"):
+        for i in range(8):
+            price = int(rng.integers(40, 46) if i < 5 else rng.integers(50, 120))
+            rows.append({"player_code": len(rows), "position": position,
+                         "team_key": f"club{len(rows) % 10}", "price": price,
+                         "base": price / 20 + rng.normal(0, 0.5)})  # fmt: skip
+    return pl.DataFrame(rows)
+
+
+def xp(players, gameweeks):
+    return pl.DataFrame([
+        {"player_code": p, "gameweek": gw, "expected_points": max(b, 0.0)}
+        for p, b in zip(players["player_code"], players["base"], strict=True)
+        for gw in gameweeks
+    ])  # fmt: skip
+
+
+def synthetic_weeks(n_weeks=3):
+    players = synthetic_players()
+    weeks = []
+    for gw in range(1, n_weeks + 1):
+        upcoming = tuple(range(gw, min(gw + 2, n_weeks) + 1))
+        actual = {p: int(b) for p, b in zip(players["player_code"], players["base"], strict=True)}
+        weeks.append(
+            ss.Week(
+                gameweek=gw,
+                pool=players.select("player_code", "position", "team_key", "price"),
+                xp=xp(players, upcoming),
+                upside=pl.DataFrame(
+                    {"player_code": players["player_code"], "sim_p90": 0.0, "p_haul": 0.0}
+                ),
+                actual=actual,
+                minutes=dict.fromkeys(actual, 90),
+            )
+        )
+    return weeks
+
+
+def test_play_records_every_gameweek_and_seeds_change_the_start():
+    weeks = synthetic_weeks()
+    settings = optimizer.Settings(time_limit_seconds=10)
+    result, records = ss.play("2021-22", weeks, settings, seed=0)
+    assert len(result.points) == len(records) == len(weeks)
+    assert all(len(r.squad) == 15 and len(r.lineup) == 11 for r in records)
+    assert all(r.captain in r.lineup for r in records)
+    starts = {
+        tuple(sorted(ss.play("2021-22", weeks, settings, seed=s)[1][0].squad)) for s in range(4)
+    }
+    assert len(starts) > 1  # different seeds, different starting squads
