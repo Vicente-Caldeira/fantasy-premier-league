@@ -272,3 +272,21 @@ def test_wildcard_chip_rebuilds_an_existing_squad_without_hits():
     assert first.hits == 0
     assert chip.gameweeks[1].free_transfers == 2  # banked transfers kept, none earned
     assert chip.gameweeks[0].expected_points > normal.gameweeks[0].expected_points
+
+
+def test_expected_price_fall_makes_the_plan_sell_a_player_it_would_keep():
+    players = pool(seed=7)
+    squad = cheapest_valid_squad(players)
+    points = xp(players, gameweeks=(1, 2))
+    normal = solve(players, points, current_squad=squad, bank=250, free_transfers=1)
+    kept = next(p for p in squad if p not in normal.gameweeks[0].transfers_out)
+    settings = opt.Settings(value_weight=10.0)
+    falling = solve(
+        players, points, current_squad=squad, bank=250, free_transfers=1,
+        settings=settings, price_moves={kept: -1.0},
+    )  # fmt: skip
+    assert kept in falling.gameweeks[0].transfers_out
+    # Without a weight, moves are ignored.
+    ignored = solve(players, points, current_squad=squad, bank=250, free_transfers=1,
+                    price_moves={kept: -1.0})  # fmt: skip
+    assert ignored.gameweeks[0].squad == normal.gameweeks[0].squad

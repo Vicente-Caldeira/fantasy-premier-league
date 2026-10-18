@@ -9,14 +9,16 @@ XI and a captain to maximise discounted expected points, subject to FPL's rules:
                gameweek, none in a wildcard week); each transfer beyond the free ones
                costs 4 points
 
-Free-transfer banking is `ft' = min(5, ft - free_used + 1)`. Having more free transfers
-is never worse, so upper bounds alone reproduce the min at the optimum. Hits are exact:
+Free-transfer banking is exactly `ft' = min(5, ft - free_used + 1)` (one binary per
+gameweek), so even a time-limited solution follows FPL's rule. Hits are exact:
 `paid = max(transfers - ft, 0)`, one binary per gameweek, because FPL spends free
 transfers first (a solver may otherwise "buy" a hit to keep free transfers banked).
 
 Prices are assumed constant over the horizon. FPL sells at purchase price plus half
 of any rise; purchase prices aren't public, so selling prices default to current
-prices unless given.
+prices unless given. Optionally, `price_moves` (expected change in each player's
+selling value by the next deadline, tenths) is valued at `Settings.value_weight`
+points per tenth, so the plan avoids holding fallers and favours risers (E10).
 
 Every solution is checked against the rules by `validate`, independently of the
 model's constraints.
@@ -52,6 +54,9 @@ class Settings:
     # are noisy and the optimiser picks the most over-estimated ones (winner's curse),
     # so treating hits as dearer than 4 points can raise realised points.
     hit_penalty: float = HIT_COST
+    # Points per 0.1m of expected selling-value change by the next deadline (E10).
+    # 0 ignores price moves.
+    value_weight: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -133,6 +138,7 @@ def optimise(  # noqa: PLR0912, PLR0913, PLR0915 - one MIP, kept in one place
     keep: Sequence[int] = (),
     ban: Sequence[int] = (),
     wildcard: bool = False,
+    price_moves: Mapping[int, float] | None = None,
 ) -> Plan:
     """Optimal plan over the gameweeks in `expected_points`.
 
@@ -144,6 +150,8 @@ def optimise(  # noqa: PLR0912, PLR0913, PLR0915 - one MIP, kept in one place
     keep / ban:       players that must be in / out of the squad every gameweek.
     wildcard:         play the wildcard chip in the first gameweek: any number of
                       transfers from `current_squad`, no hits, banked transfers kept.
+    price_moves:      player_code -> expected selling-value change (tenths) of holding
+                      him through the first gameweek; weighted by `settings.value_weight`.
     """
     if set(keep) & set(ban):
         raise InfeasibleError(f"players both kept and banned: {sorted(set(keep) & set(ban))}")
@@ -258,6 +266,10 @@ def optimise(  # noqa: PLR0912, PLR0913, PLR0915 - one MIP, kept in one place
         - settings.hit_penalty * solver.Sum(paid)
         - TRANSFER_TIEBREAK * solver.Sum(bought.values())
     )
+    if price_moves and settings.value_weight:
+        objective += settings.value_weight * solver.Sum(
+            price_moves.get(p, 0.0) * squad[p, 0] for p in codes
+        )
     solver.Maximize(objective)
     status = solver.Solve()
     if status not in (pywraplp.Solver.OPTIMAL, pywraplp.Solver.FEASIBLE):

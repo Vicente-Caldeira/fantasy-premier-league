@@ -370,6 +370,51 @@ E4a's thresholds were fixed before this run (`e4.PRE_REGISTERED`) and scored on 
 - **What to use:** play the bench boost in a double gameweek with bench xP ≥ 10. The triple-captain threshold isn't supported; keep it as a weak preference for double gameweeks, not a rule. The free hit can be played whenever convenient (blank gameweeks in practice, which this budget-approximate simulator doesn't model).
 - The intervals (path bootstrap) are omitted for the same reason as in E4a: each season-half is effectively one decision.
 
+## How good is it? Gameweek level and estimated overall rank
+
+**Per gameweek** (2021-23, walk-forward v2 on the fixed data). Picks are made from every player with a fixture, with no budget or squad limits:
+
+| Per gameweek | v2 | Form (`points_ewm`) | Hindsight |
+|---|---|---|---|
+| Correlation, predicted vs actual | **0.58** | 0.51 | 1 |
+| Points of the predicted top 11 | **63.4** | 60.9 | 142.9 |
+| Points of the predicted top 50 | **231** | 208 | |
+| Actual top-20 scorers in the predicted top 20 | **22%** | 18% | 100% |
+| Top-1 pick (captain) | 7.4 | 8.3 | 18.2 |
+
+- R² over all player-gameweeks is 0.35: most of a gameweek's points are unpredictable.
+- The captain gap to form is noise: −0.95 pts/GW, 95% CI (−2.6, +0.7), over 75 gameweeks.
+
+**Estimated overall rank.** Simulated season totals (after hits, no chips) are mapped to ranks using 700 random managers' past seasons from the public FPL API: final points and rank, with a local log-rank fit. The fit agrees with published cutoffs, e.g. a 2021-22 top-100k cutoff of 2,505. "+ chips" adds an *estimate* of +105 points: two wildcards (+72, E4b) plus one triple captain, bench boost and free hit (about half of E4a's value for two of each).
+
+| Season | Simulated | Rank, no chips | + chips (est.) | Rank with chips | Managers |
+|---|---|---|---|---|---|
+| 2018-19 (v2) | 2,174 | ~374k (6%) | 2,279 | **~80k (1.3%)** | 6.3M |
+| 2020-21 (v2) | 2,207 | ~865k (11%) | 2,312 | **~315k (4%)** | 8.2M |
+| 2021-22 (v2, fixed) | 2,132 | ~1.7M (18%) | 2,237 | **~970k (11%)** | 9.2M |
+| 2022-23 (v2, fixed) | 2,204 | ~2.7M (23%) | 2,309 | **~1.4M (13%)** | 11.4M |
+
+- Ranks are ±20%, and path-to-path luck spans 2–3× in rank.
+- The field got stronger: the median manager rose from 2,006 (2018-19) to 2,229 (2022-23).
+- The gap to the top 100k is about 200 points. The likely causes are no team news (minutes are 22% of the error), no in-week price timing (E10) and ignoring ownership.
+
+## E10: price-aware transfers
+
+`fpl_models.prices`: P(rise) and P(fall) by the next deadline, isotonic in the deadline's net transfer share and fitted walk-forward per season. It's well calibrated, e.g. predicted P(rise) 0.54 vs 0.55 actual, and P(fall) 0.51 vs 0.50, in the top 1%.
+- Holding a player through the gameweek is worth `0.5·P(rise) − P(fall)` tenths of selling value: FPL keeps half of a rise and all of a fall.
+- The optimiser values that at `Settings.value_weight` points per 0.1m. The simulator already moves prices and the bank for real, so any gain is realised, not assumed.
+
+| Value weight | Δ points per season vs v2 (fixed), 95% CI | Hits per season | GW19 squad price |
+|---|---|---|---|
+| 0 (production) | | 36.6 | £99.0m / £99.3m |
+| 0.5 | +20.8 (−4.3, +47.2) | 38.5 | £99.2m / £99.4m |
+| 1 | −28.5 (−52.8, −4.5) | 43.3 | £99.6m / £99.3m |
+| 2 | +10.2 (−15.1, +36.6) | 49.9 | £99.9m / £100.2m |
+
+Results are with 20 paths per season. The two GW19 squad prices are for 2021-22 / 2022-23.
+
+<!-- E10B -->
+
 ## Tried and rejected
 
 | Change | Tuning-season result | Decision |

@@ -18,7 +18,7 @@ The first deadline builds the squad from scratch. Chips aren't used.
 """
 
 from collections import Counter
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 from functools import partial
@@ -278,6 +278,7 @@ def play(  # noqa: PLR0913 - chip options are keyword-only
     start_noise: float = 0.3,
     wildcards: Collection[int] = (),
     wildcard_threshold: float | None = None,
+    price_moves: Mapping[int, Mapping[int, float]] | None = None,
 ) -> tuple[SeasonResult, list[PathRecord]]:
     """Manage one team through the prepared season.
 
@@ -288,6 +289,9 @@ def play(  # noqa: PLR0913 - chip options are keyword-only
     Wildcard (once per half): played in the listed `wildcards` gameweeks, or, with
     `wildcard_threshold`, at the first deadline where the wildcard plan's objective
     beats the normal plan's by at least that much.
+
+    `price_moves` (gameweek -> player -> expected selling-value change, `prices`) is
+    passed to the optimiser, which values it at `settings.value_weight`.
     """
     result, records = SeasonResult(season), []
     squad: list[int] | None = None
@@ -314,6 +318,7 @@ def play(  # noqa: PLR0913 - chip options are keyword-only
         solve = partial(
             optimizer.optimise, players, xp, current_squad=squad, bank=bank,
             free_transfers=free_transfers, selling_prices=sell, settings=settings,
+            price_moves=(price_moves or {}).get(week.gameweek),
         )  # fmt: skip
 
         half = 1 if week.gameweek <= FIRST_HALF_END else 2

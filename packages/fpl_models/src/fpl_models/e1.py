@@ -21,11 +21,12 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from fpl_models import experiments, optimizer, player_model, team_strength
+from fpl_models import experiments, optimizer, player_model, prices, team_strength
 from fpl_models.data import DEFAULT_WAREHOUSE, load_player_matches, player_gameweeks
 from fpl_models.season_sim import SeasonSimulator, Week, play
 
 OUT = Path("data/experiments/e1")
+PRICE_MOVES = Path("data/experiments/e10/moves.parquet")  # written by `fpl_models.prices`
 PATHS = 20
 # "v2fix": production prepared after the 2022-23 zero-xG fix ("v2" paths predate it).
 CONFIGS = {
@@ -66,6 +67,7 @@ class Job:
     label: str
     wildcards: tuple[int, ...] = ()
     wildcard_threshold: float | None = None
+    value_weight: float = 0.0  # E10: points per 0.1m of expected selling-value change
 
 
 def path_file(label: str, season: str, seed: int) -> Path:
@@ -76,10 +78,15 @@ def _play(job: Job) -> str:
     config, season, horizon, seed, label = job.config, job.season, job.horizon, job.seed, job.label
     cached = weeks_path(config, season, horizon).read_bytes()
     weeks: list[Week] = pickle.loads(cached)  # noqa: S301 - our own cache file
-    settings = optimizer.Settings(time_limit_seconds=30, hit_penalty=job.hit_penalty)
+    settings = optimizer.Settings(
+        time_limit_seconds=30, hit_penalty=job.hit_penalty, value_weight=job.value_weight
+    )
+    moves = None
+    if job.value_weight:
+        moves = prices.by_gameweek(pl.read_parquet(PRICE_MOVES), season)
     result, records = play(
         season, weeks, settings, seed=seed, wildcards=job.wildcards,
-        wildcard_threshold=job.wildcard_threshold,
+        wildcard_threshold=job.wildcard_threshold, price_moves=moves,
     )  # fmt: skip
     path = path_file(label, season, seed)
     path.write_text(json.dumps([asdict(r) for r in records]))
@@ -163,6 +170,7 @@ def main() -> None:
     parser.add_argument("--wildcards", type=int, nargs="*", default=[], help="gameweeks")
     parser.add_argument("--wildcard-threshold", type=float)
     parser.add_argument("--skip-existing", action="store_true")
+    parser.add_argument("--value-weight", type=float, default=0.0, help="E10, points per 0.1m")
     parser.add_argument("--labels", nargs="+", default=[])
     parser.add_argument("--against", default="v2")
     parser.add_argument("--seasons", nargs="+", default=list(experiments.TUNING_SEASONS))
@@ -185,6 +193,7 @@ def main() -> None:
                 args.label or c,
                 tuple(args.wildcards),
                 args.wildcard_threshold,
+                args.value_weight,
             )
             for seed in range(*args.seeds)
             for c in args.configs
