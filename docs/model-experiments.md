@@ -99,6 +99,17 @@ FPL only has xG from 2022-23, so the two target variants are identical on 2021-2
 
 These totals aren't comparable to real managers' scores: no chips, and no in-season squad from GW1 history.
 
+## Held-out evaluation (run once: 2023-24, 2024-25, 2025-26)
+
+Every choice above was made on 2021-23 only. The final candidate (`player_model.PRODUCTION` = tuned GBM + xG targets + crowd share/ownership + schedule) was then scored a single time on the held-out seasons:
+
+| | regulars MAE | Δ vs v1 (95% CI) | Δ captain pts / GW | Δ top-11 pts / GW |
+|---|---|---|---|---|
+| v1 (original component model) | 1.7914 | | | |
+| **v2 (PRODUCTION)** | **1.7491** | **−0.042 (−0.049, −0.036)** | +0.6 (−0.5, +1.6) | +1.5 (−0.7, +3.6) |
+
+The accuracy gain carries over almost exactly (tuning: −0.062; held-out: −0.042, the usual small shrinkage). The decision metrics point the right way but aren't individually significant. **v2 is promoted:** it is now used by the `expected_points` asset, and both versions appear on the leaderboard.
+
 ## Simulator calibration (fit before 2022-23, simulate all of 2022-23)
 
 For player-gameweeks with a simulated mean of at least 2 (about 6,600):
