@@ -452,7 +452,7 @@ The honest scoreboard. The planner manages its own team through the live season,
     uv run python -m fpl_models.shadow init --from-path data/experiments/e1/paths/v2fixn0_2026-27_00.json
     uv run python -m fpl_models.shadow run    # or the Dagster asset gold/shadow/state
 
-<!-- BIAS -->
+**Start-noise bias check.** Season paths start from a squad built on noisy expected points (`start_noise = 0.3`), so the paths differ. Does that noise cost points? With `start_noise = 0.1` on the tuning seasons (30 paths per season): **+15.9 per season (95% CI −6.3, +38.4)** vs 0.3. A small pessimistic bias of up to ~16 points is possible but not established. The rank estimates above may be slightly low, by well under one rank band.
 
 ## Tried and rejected
 
