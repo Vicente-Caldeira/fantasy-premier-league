@@ -69,9 +69,22 @@ def season_files():
     return matches, players
 
 
-def current_layout(season, dataset, gw):
+def current_layout(season, dataset, gw, tournament="Premier League"):
     folder = f"{season[:4]}-{int(season[:4]) + 1}"
-    return f"data/{folder}/By Tournament/Premier League/GW{gw}/{dataset}.csv"
+    return f"data/{folder}/By Tournament/{tournament}/GW{gw}/{dataset}.csv"
+
+
+def cup_row(match_id, home, away, kickoff="2026-09-16T19:00:00+00:00", finished=True):
+    return {"gameweek": "4.0", "kickoff_time": kickoff, "home_team": home, "away_team": away,
+            "finished": str(finished), "match_id": match_id}  # fmt: skip
+
+
+CUP_ROWS = [
+    cup_row("ucl-arsenal-vs-psv", "3.0", ""),
+    cup_row("ucl-inter-vs-liverpool", "", "14.0"),
+    cup_row("ucl-knockout-without-kickoff", "8.0", "", kickoff=""),
+    cup_row("ucl-arsenal-vs-psv/inter", "3.0", "", finished=False),
+]
 
 
 class FakeGitHub:
@@ -85,7 +98,7 @@ class FakeGitHub:
         ]
         entries.append(
             {
-                "path": "data/2026-2027/By Tournament/EFL Cup/GW1/matches.csv",
+                "path": "data/2026-2027/By Tournament/Friendlies/GW1/matches.csv",
                 "type": "blob",
                 "sha": "0" * 40,
             }
@@ -122,6 +135,7 @@ def lake(tmp_path):
     files |= {
         current_layout(season, "playermatchstats", gw): to_csv(r) for gw, r in players.items()
     }
+    files[current_layout(season, "matches", 4, "Champions League")] = to_csv(CUP_ROWS)
     GITHUB.files = files
     GITHUB.raw_requests = []
     return Lake(base_url=str(tmp_path))
@@ -173,6 +187,11 @@ def test_select_files_handles_both_layouts_and_ignores_the_rest():
         },
         {
             "type": "blob",
+            "sha": "d2",
+            "path": "data/2026-2027/By Tournament/Friendlies/GW7/matches.csv",
+        },
+        {
+            "type": "blob",
             "sha": "e",
             "path": "data/2026-2027/By Tournament/Premier League/GW7/shots.csv",
         },
@@ -183,8 +202,10 @@ def test_select_files_handles_both_layouts_and_ignores_the_rest():
     assert [(r.season, r.dataset, r.gameweek) for r in refs] == [
         ("2024-25", "matches", 3),
         ("2024-25", "playermatchstats", 3),
+        ("2026-27", "cup_matches", 7),
         ("2026-27", "matches", 7),
     ]
+    assert src.cup_name(refs[2].path) == "EFL Cup"
 
 
 @pytest.mark.parametrize(
@@ -242,7 +263,9 @@ def test_snapshot_downloads_verified_blobs_and_pins_the_commit(lake):
     assert result.success
     manifest = json.loads(lake.read_bytes(assets.SOURCE.manifest_path(TODAY)))
     assert manifest["commit"] == COMMIT
-    assert len(manifest["files"]) == 76  # 38 gameweeks x 2 datasets; EFL Cup ignored
+    assert (
+        len(manifest["files"]) == 77
+    )  # 38 gameweeks x 2 datasets + a cup file; friendlies ignored
     assert all(lake.exists(assets.SOURCE.blob_path(f["sha"])) for f in manifest["files"])
 
 
@@ -250,7 +273,7 @@ def test_only_missing_blobs_are_downloaded(lake):
     already = next(iter(GITHUB.files.values()))
     lake.write_bytes(assets.SOURCE.blob_path(git_blob_sha(already)), already)
     run(lake, [assets.repo_snapshot], TODAY)
-    assert len(GITHUB.raw_requests) == 75
+    assert len(GITHUB.raw_requests) == 76
 
 
 def test_corrupted_download_fails_the_snapshot(lake, monkeypatch):
@@ -290,3 +313,22 @@ def test_orphan_player_rows_are_blocked(lake):
     run(lake, [assets.repo_snapshot], TODAY)
     result = run(lake, [assets.matches, assets.player_match_stats], current_season())
     assert checks(result)["player_rows_are_valid"] is False
+
+
+def test_cup_matches_drop_untimed_and_undecided_ties():
+    df = src.parse_cup_matches(to_csv(CUP_ROWS), "2026-27", "Champions League")
+    assert df["match_id"].to_list() == ["ucl-arsenal-vs-psv", "ucl-inter-vs-liverpool"]
+    assert df["home_team_code"].to_list() == [3, None]  # foreign clubs have no code
+    assert df["away_team_code"].to_list() == [None, 14]
+    assert df["kickoff_time"][0] == datetime(2026, 9, 16, 19, 0, tzinfo=UTC)
+
+
+def test_cup_matches_build_and_pass_checks(lake):
+    run(lake, [assets.repo_snapshot], TODAY)
+    result = run(lake, [assets.cup_matches], current_season())
+    assert result.success
+    assert checks(result) == {"cup_matches_involve_league_clubs": True}
+    base = Path(lake.base_url) / "silver/fpl_elo_insights"
+    table = pl.read_parquet(base / f"cup_matches/season={current_season()}/data.parquet")
+    assert table["competition"].unique().to_list() == ["Champions League"]
+    assert table.height == 2

@@ -107,3 +107,13 @@ models:
     columns:
       - name: team_key
         data_tests: [not_null]
+
+  - name: fct_cup_matches
+    description: >
+      Cup and European matches of Premier League clubs (2025-26 onwards), one row per
+      club per match.
+    columns:
+      - name: team_key
+        data_tests: [not_null]
+      - name: kickoff_utc
+        data_tests: [not_null]
