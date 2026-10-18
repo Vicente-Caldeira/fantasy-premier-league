@@ -22,6 +22,10 @@ sources:
         meta:
           external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/fpl/player_matches/*/data.parquet', hive_partitioning = false, union_by_name = true)"
           dagster: {asset_key: [silver, fpl, player_matches]}
+      - name: gameweeks
+        meta:
+          external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/fpl/gameweeks/*/data.parquet', hive_partitioning = false, union_by_name = true)"
+          dagster: {asset_key: [silver, fpl, gameweeks]}
       - name: fixtures
         meta:
           external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/fpl/fixtures_table/*/data.parquet', hive_partitioning = false, union_by_name = true)"

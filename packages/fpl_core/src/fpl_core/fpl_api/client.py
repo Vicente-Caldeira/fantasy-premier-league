@@ -47,3 +47,18 @@ class FplApiClient(RetryingHttpClient):
         ids = list(element_ids)
         with ThreadPoolExecutor(max_workers=self._max_workers) as pool:
             return dict(zip(ids, pool.map(self.element_summary, ids), strict=True))
+
+    def entry_history(self, entry_id: int) -> dict[str, Any]:
+        """A manager's season so far: per-gameweek bank, value, transfers, chips."""
+        result: dict[str, Any] = self.get_json(f"/entry/{entry_id}/history/")
+        return result
+
+    def entry_transfers(self, entry_id: int) -> list[dict[str, Any]]:
+        """Every transfer this season, with the price paid (`element_in_cost`)."""
+        result: list[dict[str, Any]] = self.get_json(f"/entry/{entry_id}/transfers/")
+        return result
+
+    def entry_picks(self, entry_id: int, gameweek: int) -> dict[str, Any]:
+        """The 15 players a manager held for `gameweek`, plus that week's bank."""
+        result: dict[str, Any] = self.get_json(f"/entry/{entry_id}/event/{gameweek}/picks/")
+        return result
