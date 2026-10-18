@@ -176,6 +176,20 @@ In the 6 gameweeks where a defender was the model's top pick, he scored 8.8 on a
 8. **Model registry and serving:** persist the fitted v2 components to the MLflow registry, so the API serves predictions without retraining (about 50 s per run today).
 9. **Top-end bias correction** for DEF, GKP and FWD (−5%), by isotonic regression on the tuning seasons. The earlier price-band calibration failed, but a position × predicted-value one wasn't tried.
 
+## E5: position calibration (rejected)
+
+Walk-forward isotonic maps (predicted → actual), refitted every 4 gameweeks on earlier predictions only, with 2020-21 as warm-up. Compared with raw v2 on 2021-23:
+
+| Variant | Δ regulars MAE (95% CI) | Δ captain | Δ top-11 |
+|---|---|---|---|
+| per position | +0.028 (+0.024, +0.032) | +0.0 (−1.1, +1.2) | −0.8 (−2.3, +0.5) |
+| one map | +0.027 (+0.024, +0.031) | +0.7 (−0.0, +1.7) | −0.9 (−2.4, +0.4) |
+| half strength, per position | +0.013 (+0.011, +0.015) | −0.3 | −1.2 (−2.1, −0.3) |
+
+- **MAE punishes mean calibration:** points are right-skewed (mean > median), so moving predictions toward the conditional mean raises absolute error. The decision metrics are the relevant test, and they show no gain.
+- **The isotonic maps overfit the sparse top end:** high-predicted goalkeepers went 6.28 → 7.89 against 5.86 actual.
+- **The bias was smaller than first measured:** with true walk-forward predictions, high-predicted defenders run 5.73 vs 5.58 actual (−3%, not −5%).
+
 ## Tried and rejected
 
 | Change | Tuning-season result | Decision |
