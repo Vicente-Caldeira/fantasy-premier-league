@@ -35,14 +35,21 @@ One row per player per fixture. Every rolling input uses **previous gameweeks on
 | Form | exponentially weighted points per gameweek |
 | Match context | home/away, the team's and the opponent's λ (from team strength), P(clean sheet), fixtures this gameweek |
 | Player | position, price |
+| Schedule (v2) | the team's and the opponent's rest days since their previous league match, and league matches in the previous 14 days |
+| Crowd (v2) | the fraction of managers who own him, and his share of all net transfer activity this gameweek |
 
 **Recency:** there's no season boundary. Older games fade: 8 gameweeks ago counts ½, 16 counts ¼, and a full season ago about 4%. Early in a season last season dominates, and within a couple of months the current one does.
+
+**Crowd signal:** before each deadline, millions of managers react to team news, injuries and press conferences. The model doesn't otherwise see that information. A player's net transfers ÷ everyone's |net transfers| is the same whether the window is complete or half over. That matters because live, FPL's counters hold the window still open. It exists only for the next deadline, so later gameweeks use a **planning model** trained without crowd features.
 
 **Missing data:** xG exists only from 2022-23, and CBIT only for 2016-19 and 2025+. Missing values stay missing (not 0), and the trees handle them natively.
 
 ## 3. Component models (`player_model.py`)
 
-scikit-learn **HistGradientBoosting**: gradient-boosted decision trees (the same family as XGBoost and LightGBM), 200 trees, learning rate 0.05, position as a categorical input.
+scikit-learn **HistGradientBoosting**: gradient-boosted decision trees (the same family as XGBoost and LightGBM), with position as a categorical input. v2 settings (`player_model.PRODUCTION`) were chosen on 2021-23 with paired-bootstrap tests:
+- 400 trees, learning rate 0.03;
+- at least 100 rows per leaf, L2 regularisation 1.0;
+- training rows weighted with a 180-day half-life.
 
 | Model | Target | Loss |
 |---|---|---|
@@ -51,7 +58,8 @@ scikit-learn **HistGradientBoosting**: gradient-boosted decision trees (the same
 | saves | counts (goalkeepers only) | Poisson |
 | defensive contribution | reached 10 CBIT (DEF) / 12 CBIRT (MID, FWD) | binary log-loss |
 
-- **Training data:** the latest 4 seasons, every row weighted equally. The defensive-contribution model uses every season that has CBIT data.
+- **Training data:** the latest 4 seasons, with recent rows weighted more (above). The defensive-contribution model uses every season that has CBIT data.
+- **Targets (v2):** goals and assists models learn from **xG and xA** where FPL has them (2022-23+). The expected value is the same, with far less noise than whether a 0.3 xG chance went in. This was the single largest MAE gain.
 
 ## 4. From events to points
 
@@ -68,19 +76,29 @@ points =  P(1–59)·1 + P(60+)·2
 
 Live predictions also apply FPL's availability flags, which have no history and so can't be learned: `chance_of_playing_next_round` scales the next gameweek, and `u` (left the club) zeroes all gameweeks.
 
+**Distributions:** `simulator.py` draws 4,000 coherent matches per fixture:
+- team goals = the sum of its players' goals + own goals;
+- assists rise and fall with the team's goals;
+- goals conceded and clean sheets come from the opponent's simulated goals;
+- bonus is tied to returns;
+- attacking output is overdispersed.
+
+This gives p10/p90 and P(haul ≥10) per player-gameweek. Means are calibrated, but hauls are still under-predicted by about 20% (see the experiment log).
+
 ## 5. Training and evaluation
 
 - **Backtest** (`backtest.py`): walk forward through each gameweek of 2023-24 → 2025-26. Models are retrained every 4 gameweeks on data before the deadline only. Models never receive the outcome columns they're asked to predict.
 - **Metrics:** MAE on regular players (the primary metric), captain points and top-11 points against hindsight, and rank correlation.
 - **Tuning discipline:** settings may only be chosen on 2021-22 and 2022-23. The 2023-26 evaluation seasons are scored once per accepted change.
+- **Season simulation** (`season_sim.py`): the end-to-end acceptance test. It manages a team through a whole past season, deciding blind at each deadline with the optimiser and scoring the real gameweek (auto-subs, captain/vice, hits, price changes). v2 scored +292 points over v1 across 2021-23.
 - **Live:** each daily run retrains on all history (about 50 s) and predicts the next 5 gameweeks. Trained models aren't persisted yet (Phase 4).
 
 ## 6. Known weaknesses
 
 See `docs/model-experiments.md` for the work list and results.
 
-- **No hyperparameter tuning:** tree settings, the 8-gameweek feature half-life and the 4-season window are all defaults.
-- **Training rows aren't weighted by recency.**
+- **Only coarse tuning so far:** a one-at-a-time grid, no joint search. The 8-gameweek feature half-life and 4-season window were tested and kept.
+- **European and cup fixtures aren't in the schedule features yet.**
 - **Premium players (11.0m+) are under-predicted by about 5%.** A price-band calibration layer didn't help on the tuning seasons and was discarded.
-- **Only the mean is optimised:** captaincy upside, variance and ownership (rank risk) aren't modelled.
+- **The optimiser uses only the mean:** the simulator's distributions (upside, P(haul)) aren't used for captaincy or rank risk yet.
 - **Rare events aren't modelled:** red cards, own goals and penalties.
