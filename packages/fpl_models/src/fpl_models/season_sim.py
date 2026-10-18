@@ -279,6 +279,7 @@ def play(  # noqa: PLR0913 - chip options are keyword-only
     wildcards: Collection[int] = (),
     wildcard_threshold: float | None = None,
     price_moves: Mapping[int, Mapping[int, float]] | None = None,
+    extra_bank: int = 0,
 ) -> tuple[SeasonResult, list[PathRecord]]:
     """Manage one team through the prepared season.
 
@@ -292,6 +293,9 @@ def play(  # noqa: PLR0913 - chip options are keyword-only
 
     `price_moves` (gameweek -> player -> expected selling-value change, `prices`) is
     passed to the optimiser, which values it at `settings.value_weight`.
+
+    `extra_bank` (tenths) is added to the bank after the first squad is built: what a
+    given amount of extra budget is worth in points (E13).
     """
     result, records = SeasonResult(season), []
     squad: list[int] | None = None
@@ -336,7 +340,7 @@ def play(  # noqa: PLR0913 - chip options are keyword-only
             wildcard_used.add(half)
         step = plan.gameweeks[0]
         if squad is None:
-            bank = optimizer.BUDGET - sum(price[p] for p in step.squad)
+            bank = optimizer.BUDGET - sum(price[p] for p in step.squad) + extra_bank
             paid = {p: price[p] for p in step.squad}
         else:
             bank += sum(sell[p] for p in step.transfers_out) - sum(
