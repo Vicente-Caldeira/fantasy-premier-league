@@ -68,6 +68,7 @@ class Job:
     wildcards: tuple[int, ...] = ()
     wildcard_threshold: float | None = None
     value_weight: float = 0.0  # E10: points per 0.1m of expected selling-value change
+    start_noise: float = 0.3  # first-squad noise (0: the model's own squad)
 
 
 def path_file(label: str, season: str, seed: int) -> Path:
@@ -85,8 +86,8 @@ def _play(job: Job) -> str:
     if job.value_weight:
         moves = prices.by_gameweek(pl.read_parquet(PRICE_MOVES), season)
     result, records = play(
-        season, weeks, settings, seed=seed, wildcards=job.wildcards,
-        wildcard_threshold=job.wildcard_threshold, price_moves=moves,
+        season, weeks, settings, seed=seed, start_noise=job.start_noise,
+        wildcards=job.wildcards, wildcard_threshold=job.wildcard_threshold, price_moves=moves,
     )  # fmt: skip
     path = path_file(label, season, seed)
     path.write_text(json.dumps([asdict(r) for r in records]))
@@ -171,6 +172,7 @@ def main() -> None:
     parser.add_argument("--wildcard-threshold", type=float)
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--value-weight", type=float, default=0.0, help="E10, points per 0.1m")
+    parser.add_argument("--start-noise", type=float, default=0.3, help="0: no noise")
     parser.add_argument("--labels", nargs="+", default=[])
     parser.add_argument("--against", default="v2")
     parser.add_argument("--seasons", nargs="+", default=list(experiments.TUNING_SEASONS))
@@ -194,6 +196,7 @@ def main() -> None:
                 tuple(args.wildcards),
                 args.wildcard_threshold,
                 args.value_weight,
+                args.start_noise,
             )
             for seed in range(*args.seeds)
             for c in args.configs

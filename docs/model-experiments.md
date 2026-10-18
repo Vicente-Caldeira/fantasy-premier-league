@@ -426,6 +426,34 @@ With 40 paths per season, **weight 0.5 gives +18.4 points per season (95% CI −
 - **Not adopted (yet):** the gain is suggestive, not significant, and it's the best of three weights (optimistic). Production keeps `value_weight = 0`.
 - **The mechanism is real but small at gameweek granularity:** squads end up £0.1–0.9m more valuable by GW19. Real team-value gains (£2–5m a season) come from transferring *within* the week, ahead of an overnight rise or fall, and gameweek-level history can't simulate that. The daily snapshots (from 2026-10-17) will make an in-week version testable, and the price model is ready for it.
 
+## Shadow team (live season, 2026-27)
+
+The honest scoreboard. The planner manages its own team through the live season, with the same predictions and optimiser a user gets (`fpl_models.shadow`, Dagster asset `gold/shadow/state`).
+
+**Retro start, GW1–6.** The season simulator ran on 2026-27 with production (v2, fixed xG data), decided blind: 30 seeded paths plus one noise-free path. GW7 was still provisional in the warehouse, so it's not scored. These were compared with 236 random managers active since GW1 (public FPL API, current-season history):
+
+| GW | Sampled median | Shadow (30 paths, mean) |
+|---|---|---|
+| 1 | 48 | 44.0 |
+| 2 | 78 | 64.4 |
+| 3 | 50 | 37.9 |
+| 4 | 69 | 68.1 |
+| 5 | 47 | 47.7 |
+| 6 | 57.5 | 40.8 |
+| **Total GW1–6** | **353** (p10 293, p90 411) | **302.9** (sd 31, 255–367); noise-free path 300 |
+
+- **The shadow is ~50 points behind the median after six gameweeks**, around rank 8.1M. That's far worse than the simulated full seasons (typically top 5–20%).
+- **The data isn't the problem.** 2026-27 features have no nulls and similar means to 2025-26. Per-gameweek prediction correlation is 0.40–0.60, as good as 2025-26's 0.42–0.62.
+- **The decisions are.** Captains returned 3.5 base points per gameweek (5.5 in 2025-26 GW1–6), and ~0.7 starters a week didn't play. The early season is where humans' team news and pre-season knowledge (new signings, roles) matter most, and where the model knows least (`gws_in_history` is small for everyone).
+- A strong human manager in the same period: 442 through GW6 (rank 178k), 518 through GW7 (rank 113k).
+
+**Live from GW8.** The state is initialised from the noise-free path's GW6 squad, with real purchase prices and bank replayed. GW7 is held: no transfers, +1 free transfer, unscored. The daily `warehouse_build` run then plans each next gameweek and scores it once final:
+
+    uv run python -m fpl_models.shadow init --from-path data/experiments/e1/paths/v2fixn0_2026-27_00.json
+    uv run python -m fpl_models.shadow run    # or the Dagster asset gold/shadow/state
+
+<!-- BIAS -->
+
 ## Tried and rejected
 
 | Change | Tuning-season result | Decision |
