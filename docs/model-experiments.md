@@ -205,6 +205,23 @@ E1's v2 paths were rescored with only the captain and vice re-chosen (1,500 path
 
 For **total points**, the highest-expected-points captain is optimal (as theory says), and upside rules only add noise. Upside matters for **rank**, which depends on ownership. That needs effective ownership in the simulation, and becomes a separate experiment (E2b).
 
+## E4a: chip timing (triple captain, bench boost, free hit)
+
+The 2025-26 rules: each chip once per half, one chip per gameweek. A rule plays the chip at the first gameweek its signal reaches T, otherwise in the half's last gameweek. Points are the chip's extra points per season, on the 60 v2 paths (30 per season).
+
+| Chip | Last GW of half (no rule) | Best rule | Gain of rule | Hindsight (upper bound) |
+|---|---|---|---|---|
+| Triple captain | +12.7 | captain xP ≥ 10 | **+24.3** | +38.0 |
+| Bench boost | +9.4 | bench xP ≥ 10–12 | **+19.2** | +42.5 |
+| Free hit | +42.0 | best one-week XI ≥ 20 xP above current | +42.5 | +75.8 |
+| **All three** (one per GW; triple captain moves on a clash) | | | **+76.8 per season** | |
+
+- **The rules rediscover known FPL wisdom.** A captain xP ≥ 10 and a bench xP ≥ 10 happen essentially only in **double gameweeks**, so "triple captain and bench boost in a double gameweek" is worth about +10 pts each over playing them blindly.
+- **The free hit is worth about 42 points wherever it's played.** A fresh optimal one-week squad beats a squad built up over months by about 20 points, so its timing barely matters here. It's limited by the 100.0m budget approximation, which is conservative because real squad values rise.
+- **Caveat 1: the intervals are too narrow, so they aren't shown.** The paths share the same gameweeks, so in each season-half there is effectively one decision. Two seasons give 4 halves.
+- **Caveat 2: the thresholds are chosen and scored on the same paths, so the gains are optimistic.** They need confirming on the held-out seasons before anyone relies on them.
+- **Wildcard:** E4b, which needs new paths.
+
 ## E5: position calibration (rejected)
 
 Walk-forward isotonic maps (predicted → actual), refitted every 4 gameweeks on earlier predictions only, with 2020-21 as warm-up. Compared with raw v2 on 2021-23:
