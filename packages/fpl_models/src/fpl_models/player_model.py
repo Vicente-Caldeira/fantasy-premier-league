@@ -21,7 +21,7 @@ from scipy.stats import poisson
 from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 
 from fpl_core import scoring
-from fpl_models import simulator
+from fpl_models import simulator, structural
 from fpl_models.player_features import (
     CROWD_ALL,
     FEATURES,
@@ -101,6 +101,17 @@ class ModelConfig:
     # Rescale players' expected goals/assists so each team's add up to its expected
     # goals (live GW8: player sums ranged from 57% to 126% of team lambda).
     reconcile: bool = False
+    # sklearn's default: hold out 10% and stop after 10 rounds without improvement
+    # (on whenever there are > 10k rows). E15: stopping early at a low learning rate
+    # leaves predictions compressed toward the mean.
+    early_stopping: bool | str = "auto"
+    # E16: count components as per-90 rates *given he plays* (trained on appearances,
+    # weighted by minutes), times expected minutes from the minutes model. Unconditional
+    # targets make one tree model learn P(play) x rate, which compresses the top end.
+    conditional_rates: bool = False
+    # E17: weight of the structural attacking model (shrunk per-90 rates x fixture x
+    # expected minutes, `structural`) in expected goals and assists; 0 = trees only.
+    structural_weight: float = 0.0
 
     def gbm_params(self) -> dict[str, object]:
         return {
@@ -110,6 +121,7 @@ class ModelConfig:
             "min_samples_leaf": self.min_samples_leaf,
             "l2_regularization": self.l2_regularization,
             "categorical_features": [self.features.index(POSITION_FEATURE)],
+            "early_stopping": self.early_stopping,
             "random_state": 0,
         }
 
@@ -167,17 +179,36 @@ class FittedComponents:
     features: tuple[str, ...] = FEATURES
     # Team goals scored / assisted by players, per unit of team lambda (from training).
     team_rates: dict[str, float] | None = None
+    # Mean minutes of a 1-59 and a 60+ appearance (E16/E17 expected minutes).
+    class_minutes: tuple[float, float] | None = None
+    # E16: the count models predict per-90 rates given an appearance.
+    rates_given_appearance: bool = False
+    # E17: structural goals/assists models and their weight against the trees.
+    attack: dict[str, structural.AttackModel] | None = None
+    structural_weight: float = 0.0
 
     def components(self, rows: pl.DataFrame) -> pl.DataFrame:
         """Expected events per fixture row."""
         x = feature_matrix(rows, self.features)
         p_minutes = self.minutes.predict_proba(x)
         classes = list(self.minutes.classes_)
+        p60, p1_59 = p_minutes[:, classes.index(2)], p_minutes[:, classes.index(1)]
+        exposure: np.ndarray | float = 1.0
+        if self.class_minutes is not None:
+            short, long = self.class_minutes
+            exposure = (p60 * long + p1_59 * short) / 90
+        scale = exposure if self.rates_given_appearance else 1.0
+        events = {t: model.predict(x) * scale for t, model in self.counts.items()}
+        if self.attack and self.structural_weight:
+            w = self.structural_weight
+            for target, attack in self.attack.items():
+                structural_events = attack.rate(rows) * exposure
+                events[target] = w * structural_events + (1 - w) * events[target]
         out = {
             "p_play": 1 - p_minutes[:, classes.index(0)],
-            "p_60": p_minutes[:, classes.index(2)],
-            "p_1_59": p_minutes[:, classes.index(1)],
-            **{f"e_{t}": model.predict(x) for t, model in self.counts.items()},
+            "p_60": p60,
+            "p_1_59": p1_59,
+            **{f"e_{t}": v for t, v in events.items()},
             "p_defcon": (self.defcon.predict_proba(x)[:, 1] if self.defcon else np.zeros(len(x))),
         }
         return pl.DataFrame(out)
@@ -193,24 +224,52 @@ def fit_components(
     """`defcon_train`: CBIT-labelled outfield rows, which exist only in some seasons."""
     config = config or ModelConfig()
 
-    def fit(model: Masked, rows: pl.DataFrame, y: np.ndarray) -> Masked:
-        return model.fit(feature_matrix(rows, config.features), y, sample_weights(rows, config))
+    def fit(
+        model: Masked, rows: pl.DataFrame, y: np.ndarray, exposure: np.ndarray | None = None
+    ) -> Masked:
+        weights = sample_weights(rows, config)
+        if exposure is not None:
+            weights = exposure if weights is None else weights * exposure
+        return model.fit(feature_matrix(rows, config.features), y, weights)
 
     minutes = fit(Masked(_classifier(config)), train, _minutes_class(train["minutes"]))
     denoised = {"goals_scored": "expected_goals", "assists": "expected_assists"}
     counts = {}
     for target in COUNT_TARGETS:
         rows = train.filter(pl.col("position") == "GKP") if target == "saves" else train
+        if config.conditional_rates:
+            rows = rows.filter(pl.col("minutes") > 0)
         label = rows[target].cast(pl.Float64)
         if config.denoise_weight and target in denoised:
             expected = rows[denoised[target]].cast(pl.Float64).fill_null(label)
             label = config.denoise_weight * expected + (1 - config.denoise_weight) * label
-        counts[target] = fit(Masked(_regressor(config)), rows, label.to_numpy())
+        if config.conditional_rates:
+            # Poisson on a per-90 rate weighted by exposure = Poisson on counts with
+            # log(minutes) as an offset.
+            exposure = rows["minutes"].cast(pl.Float64).to_numpy() / 90
+            counts[target] = fit(
+                Masked(_regressor(config)), rows, label.to_numpy() / exposure, exposure
+            )
+        else:
+            counts[target] = fit(Masked(_regressor(config)), rows, label.to_numpy())
     defcon = None
     if defcon_train.height:
         labels = defcon_train["defcon_hit"].cast(pl.Int8).to_numpy()
         defcon = fit(Masked(_classifier(config)), defcon_train, labels)
-    return FittedComponents(minutes, counts, defcon, config.features, team_rates(train))
+    class_minutes = None
+    if config.conditional_rates or config.structural_weight:
+        played = train["minutes"]
+        class_minutes = (
+            float(played.filter((played > 0) & (played < 60)).mean()),  # type: ignore[arg-type]
+            float(played.filter(played >= 60).mean()),  # type: ignore[arg-type]
+        )
+    attack = None
+    if config.structural_weight:
+        attack = {t: structural.fit(train, t) for t in structural.TARGETS}
+    return FittedComponents(
+        minutes, counts, defcon, config.features, team_rates(train), class_minutes,
+        config.conditional_rates, attack, config.structural_weight,
+    )  # fmt: skip
 
 
 def team_rates(train: pl.DataFrame) -> dict[str, float]:

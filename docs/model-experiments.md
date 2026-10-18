@@ -426,6 +426,36 @@ With 40 paths per season, **weight 0.5 gives +18.4 points per season (95% CI −
 - **Not adopted (yet):** the gain is suggestive, not significant, and it's the best of three weights (optimistic). Production keeps `value_weight = 0`.
 - **The mechanism is real but small at gameweek granularity:** squads end up £0.1–0.9m more valuable by GW19. Real team-value gains (£2–5m a season) come from transferring *within* the week, ahead of an overnight rise or fall, and gameweek-level history can't simulate that. The daily snapshots (from 2026-10-17) will make an in-week version testable, and the price model is ready for it.
 
+## E15–E18: why are the top players' expected points low?
+
+**Diagnosis.**
+- £10m+ players were under-predicted 8–12% in both tuning seasons: 4.48 predicted vs 5.09 actual (2021-22), and 4.83 vs 5.24 (2022-23).
+- The 20 players ranked highest each gameweek were about calibrated, so this was a ranking bias, not a level bias.
+- Premium attackers' predicted goals matched their xG, but they score about 14% above it. Targets built purely on xG (`denoise_weight = 1`) remove that finishing skill.
+- Trees also average extreme players in with similar-looking rows.
+
+All results below are paired walk-forward backtests on the tuning seasons vs `r4_xg_1` (production). Deltas are per gameweek, with 95% CIs.
+
+| Experiment | Config | Δ regulars MAE | Δ captain pts | Δ top-11 pts | Decision |
+|---|---|---|---|---|---|
+| E15 more trees | `r9_full_800` | −0.035 | −0.98 | −1.92 | Rejected: lower MAE only by predicting less |
+| E15 | `r9_full_400` | −0.015 | −1.03 | +0.23 | Rejected |
+| E15 | `r9_lr10` | +0.001 | −0.49 | −0.80 | Rejected |
+| E16 rates given an appearance | `r10_conditional` | not backtested | | | Dropped: live predictions barely move (Haaland 4.86 → 5.12) |
+| E17 structural attack rates | `r12_structural` | −0.004 (−0.007, −0.000) | +0.63 (−0.77, +2.08) | +2.12 (−0.29, +4.52) | Over-shoots premiums (5.36 vs 5.09) |
+| **E17 blend, w = 0.5** | `r12_blend` | **−0.004 (−0.006, −0.002)** | +0.25 (−1.01, +1.55) | **+2.41 (+0.68, +4.12)** | Season-simulation test below |
+| E18 targets 0.7 xG + 0.3 goals | `r13_xg_07` | −0.000 | −0.09 | +0.26 (−0.40, +0.99) | Rejected |
+| E18 targets 0.5 xG + 0.5 goals | `r13_xg_05` | −0.001 | +0.15 | −0.29 (−0.80, +0.16) | Rejected |
+
+- **MAE rewards under-prediction.** Points are right-skewed, so a model that predicts less gets a lower MAE. E15's "gains" were entirely its lower mean prediction. Decisions are judged on captain and top-11 points.
+- **E17 (`fpl_models.structural`)** builds goals and assists the way the strong public models do:
+  - a per-90 rate of 0.7 xG + 0.3 goals over recent minutes;
+  - shrunk towards a log-linear price prior per position, with the strength chosen on the newest training rows;
+  - multiplied by this fixture's team λ over the team's recent average, then by expected minutes;
+  - calibrated per position to the training totals.
+- **Blending half structural, half tree** fixes premium calibration: £10m+ players are now 4.92 vs 5.09 actual (2021-22) and 5.19 vs 5.24 (2022-23). Overall and positional calibration are unchanged.
+- **E18 doesn't help:** putting actual goals back in the target barely moves premiums (4.48 → 4.48). The tree still averages them away, so the bias is structural, not about the label.
+
 ## Tried and rejected
 
 | Change | Tuning-season result | Decision |
