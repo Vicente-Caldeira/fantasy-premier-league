@@ -32,12 +32,13 @@ SETTINGS = optimizer.Settings(time_limit_seconds=30)
 DETECT = 50  # points of season-total difference we want to be able to detect
 
 
-def weeks_path(config: str, season: str) -> Path:
-    return OUT / f"weeks_{config}_{season}.pkl"
+def weeks_path(config: str, season: str, horizon: int = 3) -> Path:
+    suffix = "" if horizon == 3 else f"h{horizon}"
+    return OUT / f"weeks_{config}{suffix}_{season}.pkl"
 
 
-def _prepare(job: tuple[str, str]) -> str:
-    config, season = job
+def _prepare(job: tuple[str, str, int]) -> str:
+    config, season, horizon = job
     matches = team_strength.load_matches(DEFAULT_WAREHOUSE)
     features = player_features.build_features(
         player_features.load_fixture_rows(DEFAULT_WAREHOUSE),
@@ -45,20 +46,23 @@ def _prepare(job: tuple[str, str]) -> str:
         player_features.schedule_features(matches),
     )
     truth = player_gameweeks(load_player_matches(DEFAULT_WAREHOUSE))
-    sim = SeasonSimulator(features, truth, matches, CONFIGS[config], settings=SETTINGS)
+    sim = SeasonSimulator(
+        features, truth, matches, CONFIGS[config], horizon=horizon, settings=SETTINGS
+    )
     weeks = sim.prepare(season)
-    weeks_path(config, season).write_bytes(pickle.dumps(weeks))
-    return f"prepared {config} {season}: {len(weeks)} gameweeks"
+    weeks_path(config, season, horizon).write_bytes(pickle.dumps(weeks))
+    return f"prepared {config} horizon {horizon} {season}: {len(weeks)} gameweeks"
 
 
-def _play(job: tuple[str, str, int]) -> str:
-    config, season, seed = job
-    cached = weeks_path(config, season).read_bytes()
+def _play(job: tuple[str, str, int, int, float, str]) -> str:
+    config, season, horizon, seed, hit_penalty, label = job
+    cached = weeks_path(config, season, horizon).read_bytes()
     weeks: list[Week] = pickle.loads(cached)  # noqa: S301 - our own cache file
-    result, records = play(season, weeks, SETTINGS, seed=seed)
-    path = OUT / "paths" / f"{config}_{season}_{seed:02d}.json"
+    settings = optimizer.Settings(time_limit_seconds=30, hit_penalty=hit_penalty)
+    result, records = play(season, weeks, settings, seed=seed)
+    path = OUT / "paths" / f"{label}_{season}_{seed:02d}.json"
     path.write_text(json.dumps([asdict(r) for r in records]))
-    return f"{config} {season} seed {seed}: {result.total} points, {sum(result.hits)} hits"
+    return f"{label} {season} seed {seed}: {result.total} points, {sum(result.hits)} hits"
 
 
 def totals() -> pl.DataFrame:
@@ -104,23 +108,59 @@ def analyse() -> None:
           f"unpaired {int(np.ceil(2 * (z * sd_unpaired / DETECT) ** 2))}")  # fmt: skip
 
 
+def compare_labels(labels: list[str], against: str) -> None:
+    """Unpaired: difference in mean season total per path, bootstrapped by path."""
+    t = totals()
+    rng = np.random.default_rng(0)
+    base = t.filter(pl.col("config") == against)
+    for label in labels:
+        other = t.filter(pl.col("config") == label)
+        gains, draws = [], np.zeros(10_000)
+        for season in sorted(other["season"].unique()):
+            a = other.filter(pl.col("season") == season)["points"].to_numpy()
+            b = base.filter(pl.col("season") == season)["points"].to_numpy()
+            gains.append(a.mean() - b.mean())
+            draws += rng.choice(a, (10_000, a.size)).mean(1) - rng.choice(b, (10_000, b.size)).mean(
+                1
+            )
+        n = other.height // max(other["season"].n_unique(), 1)
+        low, high = np.quantile(draws / len(gains), [0.025, 0.975])
+        hits = float(np.mean(other["hits"].to_numpy()))
+        print(f"{label:<14} vs {against}: {np.mean(gains):+.1f} per season (95% CI {low:+.1f}, "
+              f"{high:+.1f}); {n} paths per season; hits/season {hits:.1f}")  # fmt: skip
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("stage", choices=["prepare", "play", "analyse"])
+    parser.add_argument("stage", choices=["prepare", "play", "analyse", "compare"])
     parser.add_argument("--workers", type=int, default=16)
+    parser.add_argument("--configs", nargs="+", default=list(CONFIGS))
+    parser.add_argument("--horizon", type=int, default=3)
+    parser.add_argument("--hit-penalty", type=float, default=float(optimizer.HIT_COST))
+    parser.add_argument("--seeds", type=int, nargs=2, default=(0, PATHS), metavar=("FROM", "TO"))
+    parser.add_argument("--label", help="name for these paths (default: the config)")
+    parser.add_argument("--labels", nargs="+", default=[])
+    parser.add_argument("--against", default="v2")
     args = parser.parse_args()
     (OUT / "paths").mkdir(parents=True, exist_ok=True)
     seasons = experiments.TUNING_SEASONS
     if args.stage == "prepare":
-        jobs = [(c, s) for c in CONFIGS for s in seasons]
+        jobs = [(c, s, args.horizon) for c in args.configs for s in seasons]
         with ProcessPoolExecutor(len(jobs)) as pool:
             for line in pool.map(_prepare, jobs):
                 print(line, flush=True)
     elif args.stage == "play":
-        plays = [(c, s, seed) for seed in range(PATHS) for c in CONFIGS for s in seasons]
+        plays = [
+            (c, s, args.horizon, seed, args.hit_penalty, args.label or c)
+            for seed in range(*args.seeds)
+            for c in args.configs
+            for s in seasons
+        ]
         with ProcessPoolExecutor(args.workers) as pool:
             for line in pool.map(_play, plays):
                 print(line, flush=True)
+    elif args.stage == "compare":
+        compare_labels(args.labels, args.against)
     else:
         analyse()
 
