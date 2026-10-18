@@ -121,6 +121,16 @@ Every choice above was made on 2021-23 only. The final candidate (`player_model.
 
 The accuracy gain carries over almost exactly (tuning: −0.062; held-out: −0.042, the usual small shrinkage). The decision metrics point the right way but aren't individually significant. **v2 is promoted:** it is now used by the `expected_points` asset, and both versions appear on the leaderboard.
 
+**Re-scored after the 2022-23 zero-xG fix** (E8). This is a data correction, so the held-out seasons are scored once more:
+
+| | regulars MAE | Δ vs zero-xG data (95% CI) | Δ captain pts / GW | Δ top-11 pts / GW |
+|---|---|---|---|---|
+| v1 | 1.7873 | −0.004 (−0.006, −0.002) | −0.0 | +0.1 |
+| **v2** | **1.7474** | −0.002 (−0.004, +0.001) | +0.1 (−0.6, +0.9) | −0.1 (−1.4, +1.3) |
+| v2 − v1, both fixed | | **−0.040 (−0.045, −0.035)** | +0.7 (−0.3, +1.8) | +1.3 (−1.0, +3.5) |
+
+The fix is neutral on the held-out seasons, though worth +58 points per season in the tuning-season simulation. On the tuning seasons, 2022-23 was predicted *while* its own zero-xG weeks were the most recent training data. In 2023-26 those weeks are only part of one season in a 4-season training window. The fix is kept: it's a correction with no held-out cost.
+
 ## Simulator calibration (fit before 2022-23, simulate all of 2022-23)
 
 For player-gameweeks with a simulated mean of at least 2 (about 6,600):
