@@ -134,6 +134,19 @@ For player-gameweeks with a simulated mean of at least 2 (about 6,600):
 - **Means are calibrated.** The intervals are slightly too wide at the bottom: few players score below p10, because points are discrete and many sit at 1–2.
 - **Hauls are still under-predicted by about 20%.** Candidates: no penalty-taker or set-piece information, saves and clean-sheet bonus independent of the result, and no in-match game-state effects. That matters for captaincy, so the risk-aware captain work should wait for a fix or apply a calibration factor.
 
+## Are defender captains a bug? (tuning seasons, v2)
+
+Live v2 sometimes ranks an Arsenal defender above Haaland. Checking predictions of 4.5+ by position:
+
+| Position | n | Predicted | Actual | Hauls |
+|---|---|---|---|---|
+| DEF | 397 | 5.69 | 5.40 (−5%) | 16% |
+| GKP | 107 | 6.36 | 5.97 (−6%) | 18% |
+| MID | 765 | 5.84 | 5.82 | 19% |
+| FWD | 253 | 5.91 | 5.64 (−5%) | 21% |
+
+In the 6 gameweeks where a defender was the model's top pick, he scored 8.8 on average. **There's a mild top-end over-prediction for defenders, goalkeepers and forwards, but no evidence that defender captains are wrong.** Forwards haul more often at the same mean, which matters for rank. That is the case for the risk-aware captaincy item below.
+
 ## Backlog (ranked by expected value)
 
 | Idea | Why it might help | Status |
@@ -150,6 +163,18 @@ For player-gameweeks with a simulated mean of at least 2 (about 6,600):
 | **Prediction timing** (run ~2 h before each deadline) | Crowd share and news are most complete near the deadline | Dagster sensor on `dim_gameweeks` |
 | **Per-position models, share-of-team features, hyperparameter search** | Further accuracy | After the above |
 | **Chip strategy** (wildcard, free hit, bench boost, triple captain) | Large point swings per season | Simulator + optimiser make it testable |
+
+## Brainstorm: what would make the biggest difference next
+
+1. **Many-path season simulation:** run each setting from many starting gameweeks or squads, so differences under ~150 points become measurable. Every optimiser, chip and captaincy decision then gets a real acceptance test. Cost: CPU only.
+2. **Risk-aware captaincy:** choose the captain on the simulated distribution: mean plus a weight on P(haul), or rank-aware value against effective ownership. Tune the weight with (1).
+3. **Penalty and set-piece takers:** the bootstrap has `penalties_order` and `corners_and_indirect_freekicks_order`. Daily snapshots start now. Historically, penalties can be recovered from Understat shot data (situation = penalty). This is the most likely explanation for the haul gap.
+4. **Chips:** the wildcard, free hit, bench boost and triple captain are worth tens of points a season. The MIP already supports a wildcard week; add the free hit and bench boost, and time all four with (1).
+5. **European and cup congestion:** Elo-Insights carries other competitions from 2025-26. Add them to `schedule_features` and test rotation effects on minutes.
+6. **Availability model from daily snapshots** (status, news text, chance of playing): minutes are the largest error source. Train once a season of snapshots exists, and keep collecting daily. That's the Dagster schedule; it needs to run unattended (Cloud Run job in the free tier).
+7. **Deadline-timed predictions:** a Dagster sensor on `dim_gameweeks` reruns ~2 h before each deadline, when the crowd share and news are most complete.
+8. **Model registry and serving:** persist the fitted v2 components to the MLflow registry, so the API serves predictions without retraining (about 50 s per run today).
+9. **Top-end bias correction** for DEF, GKP and FWD (−5%), by isotonic regression on the tuning seasons. The earlier price-band calibration failed, but a position × predicted-value one wasn't tried.
 
 ## Tried and rejected
 
