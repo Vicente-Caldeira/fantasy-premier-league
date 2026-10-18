@@ -398,7 +398,7 @@ E4a's thresholds were fixed before this run (`e4.PRE_REGISTERED`) and scored on 
 - The field got stronger: the median manager rose from 2,006 (2018-19) to 2,229 (2022-23).
 - The gap to the top 100k is about 200 points. The likely causes are no team news (minutes are 22% of the error), no in-week price timing (E10) and ignoring ownership.
 
-## E10: price-aware transfers
+## E10: price-aware transfers (promising, not adopted)
 
 `fpl_models.prices`: P(rise) and P(fall) by the next deadline, isotonic in the deadline's net transfer share and fitted walk-forward per season. It's well calibrated, e.g. predicted P(rise) 0.54 vs 0.55 actual, and P(fall) 0.51 vs 0.50, in the top 1%.
 - Holding a player through the gameweek is worth `0.5·P(rise) − P(fall)` tenths of selling value: FPL keeps half of a rise and all of a fall.
@@ -413,7 +413,10 @@ E4a's thresholds were fixed before this run (`e4.PRE_REGISTERED`) and scored on 
 
 Results are with 20 paths per season. The two GW19 squad prices are for 2021-22 / 2022-23.
 
-<!-- E10B -->
+With 40 paths per season, **weight 0.5 gives +18.4 points per season (95% CI −2.6, +40.2)**, with 38.2 hits.
+
+- **Not adopted (yet):** the gain is suggestive, not significant, and it's the best of three weights (optimistic). Production keeps `value_weight = 0`.
+- **The mechanism is real but small at gameweek granularity:** squads end up £0.1–0.9m more valuable by GW19. Real team-value gains (£2–5m a season) come from transferring *within* the week, ahead of an overnight rise or fall, and gameweek-level history can't simulate that. The daily snapshots (from 2026-10-17) will make an in-week version testable, and the price model is ready for it.
 
 ## Tried and rejected
 
