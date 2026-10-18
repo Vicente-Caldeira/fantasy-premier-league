@@ -1,7 +1,7 @@
 "use client";
 
 import { PlayerPhoto } from "@/components/photo";
-import { POSITIONS } from "@/lib/format";
+import { abbr, POSITIONS, venue } from "@/lib/format";
 import type { Club, Player } from "@/lib/types";
 
 export interface PitchSlot {
@@ -16,7 +16,7 @@ function fixtureLabel(player: Player, clubs: Record<string, Club>, gameweek: num
   const fixtures = clubs[player.team_key]?.fixtures.filter((f) => f.gameweek === gameweek) ?? [];
   if (fixtures.length === 0) return "Blank";
   return fixtures
-    .map((f) => `${clubs[f.opponent]?.short_name ?? f.opponent.slice(0, 3).toUpperCase()} (${f.is_home ? "H" : "A"})`)
+    .map((f) => `${abbr(clubs, f.opponent)} (${venue(f.is_home)})`)
     .join(", ");
 }
 
@@ -44,7 +44,7 @@ function Card({
         selected ? "bg-white/25 ring-2 ring-white" : "hover:bg-white/10"
       } ${bench ? "opacity-90" : ""}`}
     >
-      <span className="relative">
+      <span className="relative block">
         <PlayerPhoto code={p.code} name={p.name} size={46} />
         {slot.captain || slot.vice ? (
           <span

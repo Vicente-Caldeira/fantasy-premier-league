@@ -9,6 +9,8 @@ const LINKS = [
   { href: "/players", label: "Players" },
   { href: "/fixtures", label: "Fixtures" },
   { href: "/clubs", label: "Clubs" },
+  { href: "/compare", label: "Compare" },
+  { href: "/chips", label: "Chips" },
 ];
 
 function ActivePath({ children }: { children: (path: string) => React.ReactNode }) {
