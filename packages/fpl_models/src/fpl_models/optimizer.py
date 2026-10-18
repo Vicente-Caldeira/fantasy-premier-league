@@ -48,6 +48,10 @@ class Settings:
     bench_weight: float = 0.1  # bench players still matter (injuries, auto-subs)
     decay: float = 0.9  # later gameweeks are less certain
     time_limit_seconds: int = 60
+    # Cost of a hit when *deciding* (scoring always deducts HIT_COST). Predicted gains
+    # are noisy and the optimiser picks the most over-estimated ones (winner's curse),
+    # so treating hits as dearer than 4 points can raise realised points.
+    hit_penalty: float = HIT_COST
 
 
 @dataclass(frozen=True)
@@ -240,7 +244,7 @@ def optimise(  # noqa: PLR0912, PLR0913, PLR0915 - one MIP, kept in one place
             )
             for t in T
         )
-        - HIT_COST * solver.Sum(paid)
+        - settings.hit_penalty * solver.Sum(paid)
         - TRANSFER_TIEBREAK * solver.Sum(bought.values())
     )
     solver.Maximize(objective)

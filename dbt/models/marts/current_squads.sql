@@ -16,7 +16,10 @@ select
     players.selected_by_percent,
     players.status,
     players.news,
-    players.chance_of_playing_next_round
+    players.chance_of_playing_next_round,
+    -- Transfers in the window now open (towards the next deadline).
+    players.transfers_in_event,
+    players.transfers_out_event
 from players
 inner join fpl_teams on players.fpl_team_id = fpl_teams.fpl_team_id
 inner join teams on fpl_teams.fpl_team_code = teams.fpl_team_code

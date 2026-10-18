@@ -57,11 +57,19 @@ def backtest_leaderboard(
     Each run is also logged to MLflow when MLFLOW_TRACKING_URI is set.
     """
     warehouse = _warehouse()
+    matches = team_strength.load_matches(warehouse)
     features = player_features.build_features(
         player_features.load_fixture_rows(warehouse),
-        player_features.match_lambdas(team_strength.load_matches(warehouse)),
+        player_features.match_lambdas(matches),
+        player_features.schedule_features(matches),
     )
-    predictors: list[Predictor] = [*BASELINES, player_model.ComponentModel(features)]
+    predictors: list[Predictor] = [
+        *BASELINES,
+        player_model.ComponentModel(features, name="component_model_v1"),
+        player_model.ComponentModel(
+            features, config=player_model.PRODUCTION, name="component_model_v2"
+        ),
+    ]
     board = leaderboard(
         predictors, player_gameweeks(load_player_matches(warehouse)), EVALUATION_SEASONS
     )
@@ -160,15 +168,20 @@ def expected_points(lake: Lake) -> dg.MaterializeResult[None]:
     """
     warehouse = _warehouse()
     matches = team_strength.load_matches(warehouse)
+    schedule = player_features.schedule_features(matches)
     features = player_features.build_features(
-        player_features.load_fixture_rows(warehouse), player_features.match_lambdas(matches)
+        player_features.load_fixture_rows(warehouse),
+        player_features.match_lambdas(matches),
+        schedule,
     )
     now = datetime.now(UTC)
     fixtures = team_strength.fixture_expectations(matches, as_of=now)
     gameweeks = next_gameweeks(warehouse, now, HORIZON)
     with duckdb.connect(str(warehouse), read_only=True) as connection:
         squads = connection.sql("select * from current_squads").pl()
-    predictions = player_model.predict_upcoming(features, squads, fixtures, gameweeks)
+    predictions = player_model.predict_upcoming(
+        features, squads, fixtures, gameweeks, config=player_model.PRODUCTION, schedule=schedule
+    )
 
     path = f"gold/player_points/expected_points/as_of={_stamp()}/data.parquet"
     uri = _write_parquet(lake, path, predictions)
