@@ -273,7 +273,7 @@ The 2025-26 rule is one wildcard per half. In a wildcard week the squad is rebui
 | **rebuild gain ≥ 20 xP** | **+71.6 (+39.9, +101.8)** | 27.1 |
 
 - **Every rule beats no wildcard.** Two free rebuilds a season are worth 30–70 points.
-- **Waiting for a large gain (≥ 20 xP) works best.** A low threshold spends the chip on the first modest opportunity. The rules overlap within their intervals, and the threshold was picked on these paths, so the +72 is optimistic. Like E4a's thresholds, it needs out-of-sample confirmation.
+- **Waiting for a large gain (≥ 20 xP) works best in-sample.** A low threshold spends the chip on the first modest opportunity. The rules overlap within their intervals and the threshold was picked on these paths. **Held out (2023-26), it's only +10.2 (−12.5, +32.3)**; see the rank section.
 - The no-wildcard baseline paths were played before the free-transfer fix (E7). That makes a difference only for time-limited solutions.
 
 ## E8: where does v2's error come from?
@@ -385,18 +385,26 @@ E4a's thresholds were fixed before this run (`e4.PRE_REGISTERED`) and scored on 
 - R² over all player-gameweeks is 0.35: most of a gameweek's points are unpredictable.
 - The captain gap to form is noise: −0.95 pts/GW, 95% CI (−2.6, +0.7), over 75 gameweeks.
 
-**Estimated overall rank.** Simulated season totals (after hits, no chips) are mapped to ranks using 700 random managers' past seasons from the public FPL API: final points and rank, with a local log-rank fit. The fit agrees with published cutoffs, e.g. a 2021-22 top-100k cutoff of 2,505. "+ chips" adds an *estimate* of +105 points: two wildcards (+72, E4b) plus one triple captain, bench boost and free hit (about half of E4a's value for two of each).
+**Estimated overall rank.** Simulated season totals (after hits, no chips) are mapped to ranks using 700 random managers' past seasons from the public FPL API: final points and rank, with a local log-rank fit. The fit agrees with published cutoffs, e.g. a 2021-22 top-100k cutoff of 2,505.
 
-| Season | Simulated | Rank, no chips | + chips (est.) | Rank with chips | Managers |
-|---|---|---|---|---|---|
-| 2018-19 (v2) | 2,174 | ~374k (6%) | 2,279 | **~80k (1.3%)** | 6.3M |
-| 2020-21 (v2) | 2,207 | ~865k (11%) | 2,312 | **~315k (4%)** | 8.2M |
-| 2021-22 (v2, fixed) | 2,132 | ~1.7M (18%) | 2,237 | **~970k (11%)** | 9.2M |
-| 2022-23 (v2, fixed) | 2,204 | ~2.7M (23%) | 2,309 | **~1.4M (13%)** | 11.4M |
+"+ chips" adds the **out-of-sample** chip values: the wildcard rule's held-out +10 per season (below), plus about +26 for one triple captain, bench boost and free hit (E4a out of sample). 2025-26 allowed two of each, so it gets about +51.
 
-- Ranks are ±20%, and path-to-path luck spans 2–3× in rank.
+| Season | Data | Paths | Simulated | Rank, no chips | + chips | Rank with chips | Managers |
+|---|---|---|---|---|---|---|---|
+| 2018-19 | never tuned on | 20 | 2,174 | ~374k (6%) | 2,210 | **~233k (3.7%)** | 6.3M |
+| 2020-21 | never tuned on | 20 | 2,207 | ~865k (11%) | 2,243 | **~641k (7.8%)** | 8.2M |
+| 2021-22 | tuning | 40 | 2,126 | ~1.7M (20%) | 2,162 | **~1.4M (16.5%)** | 8.8M |
+| 2022-23 | tuning | 40 | 2,204 | ~2.7M (24%) | 2,240 | **~2.2M (19.8%)** | 11.1M |
+| 2023-24 | held out | 20 | 2,327 | ~811k (7.5%) | 2,363 | **~559k (5.2%)** | 10.8M |
+| 2024-25 | held out | 20 | 2,216 | ~2.6M (23%) | 2,252 | **~2.1M (18.5%)** | 11.4M |
+| 2025-26 | held out | 20 | 2,028 | ~3.5M (27%) | 2,089 | **~2.5M (18.9%)** | 13.0M |
+
+- **The model is a solid top-20% manager, typically top 5–20%.** It isn't a top-100k (top 1%) manager.
+- Ranks are ±20%, and path-to-path luck spans 2–3× in rank (e.g. 2023-24 paths range from ~240k to ~1.5M).
 - The field got stronger: the median manager rose from 2,006 (2018-19) to 2,229 (2022-23).
-- The gap to the top 100k is about 200 points. The likely causes are no team news (minutes are 22% of the error), no in-week price timing (E10) and ignoring ownership.
+- The gap to the top 100k is 150–250 points. The likely causes are no team news (minutes are 22% of the error), no in-week price timing (E10) and ignoring ownership.
+
+**E4b held out: the wildcard rule is much weaker out of sample.** "Wildcard when the rebuild gains ≥ 20 xP" scores **+10.2 per season (95% CI −12.5, +32.3)** on 2023-26, with 20 paths per season, vs +72 on the tuning seasons where its threshold was chosen. It hurt in 2023-24 (−21) and helped in 2024-25 (+30) and 2025-26 (+21). Two free rebuilds a season are worth less than they looked: a squad that tracks the model's best players week by week rarely needs one.
 
 ## E10: price-aware transfers (promising, not adopted)
 
