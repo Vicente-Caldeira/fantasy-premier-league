@@ -4,8 +4,11 @@ version = "0.0.0"
 description = "HTTP API serving predictions, user teams and recommendations"
 requires-python = ">=3.12,<3.13"
 dependencies = [
+    "duckdb>=1.5",
     "fpl-core",
+    "fpl-models",
     "fastapi>=0.115",
+    "polars>=2.0",
     "pydantic-settings>=2.6",
     "uvicorn[standard]>=0.32",
 ]

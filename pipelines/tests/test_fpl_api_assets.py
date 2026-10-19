@@ -145,8 +145,29 @@ def test_rerun_reuses_existing_snapshot_without_calling_api(lake):
     first = lake.read_bytes(fpl_api.bronze_path("bootstrap_static", TODAY))
     result = run(lake)
     assert result.success
-    assert CALLS == []
+    assert CALLS == ["fixtures"]  # only fixtures refresh during the day
     assert lake.read_bytes(fpl_api.bronze_path("bootstrap_static", TODAY)) == first
+
+
+def test_rerun_today_refreshes_fixtures_with_latest_results(lake, monkeypatch):
+    run(lake)
+    payload = load_gz("fixtures.json.gz")
+    payload[0] = {**payload[0], "finished_provisional": True, "team_h_score": 4}
+    monkeypatch.setattr(FakeClient, "fixtures", lambda self: payload)
+    assert run(lake).success
+    stored = json.loads(gzip.decompress(lake.read_bytes(fpl_api.bronze_path("fixtures", TODAY))))
+    assert stored[0]["team_h_score"] == 4
+    table = read_table(lake, "fixtures_table")
+    assert table.filter(pl.col("id") == payload[0]["id"])["team_h_score"].item() == 4
+
+
+def test_fixtures_refresh_schedule_targets_today():
+    schedule = defs.get_schedule_def("fixtures_refresh_schedule")
+    context = dg.build_schedule_context(
+        scheduled_execution_time=datetime.now(UTC), repository_def=defs.get_repository_def()
+    )
+    run_request = next(iter(schedule.evaluate_tick(context).run_requests or []))
+    assert run_request.partition_key == TODAY
 
 
 def test_snapshot_guard_rejects_any_date_but_today():

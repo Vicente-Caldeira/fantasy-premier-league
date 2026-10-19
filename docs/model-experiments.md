@@ -426,6 +426,139 @@ With 40 paths per season, **weight 0.5 gives +18.4 points per season (95% CI −
 - **Not adopted (yet):** the gain is suggestive, not significant, and it's the best of three weights (optimistic). Production keeps `value_weight = 0`.
 - **The mechanism is real but small at gameweek granularity:** squads end up £0.1–0.9m more valuable by GW19. Real team-value gains (£2–5m a season) come from transferring *within* the week, ahead of an overnight rise or fall, and gameweek-level history can't simulate that. The daily snapshots (from 2026-10-17) will make an in-week version testable, and the price model is ready for it.
 
+## E12: availability, news and set-piece order, point in time
+
+FPL exposes status, news, chance of playing and set-piece order only as current state. **vaastav's repository recommits `players_raw.csv` (a bootstrap-static dump) about once a gameweek, so its history is an archive** (`fpl_models.availability`):
+- a blob-less clone gives 263 snapshots for 2019-20 to 2025-26;
+- each gameweek takes the latest snapshot *committed* before its deadline, which can't leak;
+- set-piece orders exist from 2020-21.
+
+**Coverage, the main limitation:**
+
+| Season | Snapshot ≤ 48 h before the deadline | Median age |
+|---|---|---|
+| 2019-20 / 2020-21 | 37% / 42% | 78 h / 53 h |
+| **2021-22 / 2022-23** (tuning) | **50% / 54%** | **47 h / 43 h** |
+| 2023-24 / 2024-25 | 58% / 53% | 44 h / 39 h |
+| 2025-26 | 16% | 660 h (few commits) |
+
+vaastav scrapes after a gameweek, not before the next, so the archive misses most late team news (press conferences, final training). The live tool reads the status minutes before planning.
+
+**Results**, on 2021-23 per gameweek with a paired bootstrap. "Multiplier" is what the live tool already does: × chance of playing, and 0 for players who left. It was never backtested before.
+
+| Variant | Against | Δ regulars MAE | Δ captain pts/GW | Δ top-11 pts/GW |
+|---|---|---|---|---|
+| **production × multiplier** | production | **−0.056 (−0.063, −0.049)** | +0.29 (0.00, +0.87) | +0.05 (−0.20, +0.35) |
+| availability as features | production × multiplier | +0.033 (+0.030, +0.036) | −0.06 (−1.23, +1.05) | +0.68 (−0.63, +2.07) |
+| availability features × multiplier | production × multiplier | +0.017 (+0.014, +0.021) | +0.08 (−0.95, +1.12) | +0.84 (−0.47, +2.20) |
+| penalty order × multiplier | production × multiplier | −0.001 (−0.003, +0.001) | −0.67 (−2.08, +0.71) | +1.42 (−0.31, +3.40) |
+| both × multiplier | production × multiplier | +0.017 (+0.013, +0.020) | −0.72 (−1.87, +0.32) | +1.44 (−0.52, +3.45) |
+
+- **The live multiplier is validated, and it's large.** It's the biggest MAE gain measured here, bigger than v2's whole held-out gain over v1, and the captain picks improve. The live tool is right to apply it.
+- **Learning from the archive doesn't beat it, so the features are rejected.** With snapshots ~45 h stale, the model learns a blurred version of what the fresh flag gives directly. A model only pays off with deadline-time status, which the daily snapshots (from 2026-10-17) now collect.
+- **Within-season penalty order: not significant, not adopted.** Its +1.4 top-11 points per gameweek is the same pattern as E3a, which then failed season simulation. Neither variant passed the per-gameweek gate, so neither got a season-simulation test.
+
+**In season points, the multiplier is worth +15.6 per season (95% CI −9.4, +40.6)** (`e1 --availability`, production on fixed data, 30 paths per tuning season vs 40). It's positive but not significant. With archive snapshots ~45 h stale, this is a lower bound on what the fresh live flag is worth. It also means the earlier rank estimates (which simulate without it) are slightly pessimistic for the live tool.
+
+## Shadow team (live season, 2026-27)
+
+The honest scoreboard. The planner manages its own team through the live season, with the same predictions and optimiser a user gets (`fpl_models.shadow`, Dagster asset `gold/shadow/state`).
+
+**Retro start, GW1–6.** The season simulator ran on 2026-27 with production (v2, fixed xG data), decided blind: 30 seeded paths plus one noise-free path. GW7 was still provisional in the warehouse, so it's not scored. These were compared with 236 random managers active since GW1 (public FPL API, current-season history):
+
+| GW | Sampled median | Shadow (30 paths, mean) |
+|---|---|---|
+| 1 | 48 | 44.0 |
+| 2 | 78 | 64.4 |
+| 3 | 50 | 37.9 |
+| 4 | 69 | 68.1 |
+| 5 | 47 | 47.7 |
+| 6 | 57.5 | 40.8 |
+| **Total GW1–6** | **353** (p10 293, p90 411) | **302.9** (sd 31, 255–367); noise-free path 300 |
+
+- **The shadow is ~50 points behind the median after six gameweeks**, around rank 8.1M. That's far worse than the simulated full seasons (typically top 5–20%).
+- **The data isn't the problem.** 2026-27 features have no nulls and similar means to 2025-26. Per-gameweek prediction correlation is 0.40–0.60, as good as 2025-26's 0.42–0.62.
+- **The decisions are.** Captains returned 3.5 base points per gameweek (5.5 in 2025-26 GW1–6), and ~0.7 starters a week didn't play. The early season is where humans' team news and pre-season knowledge (new signings, roles) matter most, and where the model knows least (`gws_in_history` is small for everyone).
+- A strong human manager in the same period: 442 through GW6 (rank 178k), 518 through GW7 (rank 113k).
+
+**Live from GW8.** The state is initialised from the noise-free path's GW6 squad, with real purchase prices and bank replayed. GW7 is held: no transfers, +1 free transfer, unscored. The daily `warehouse_build` run then plans each next gameweek and scores it once final:
+
+    uv run python -m fpl_models.shadow init --from-path data/experiments/e1/paths/v2fixn0_2026-27_00.json
+    uv run python -m fpl_models.shadow run    # or the Dagster asset gold/shadow/state
+
+**Start-noise bias check.** Season paths start from a squad built on noisy expected points (`start_noise = 0.3`), so the paths differ. Does that noise cost points? With `start_noise = 0.1` on the tuning seasons (30 paths per season): **+15.9 per season (95% CI −6.3, +38.4)** vs 0.3. A small pessimistic bias of up to ~16 points is possible but not established. The rank estimates above may be slightly low, by well under one rank band.
+
+## E13: in-week price timing (measured on 2023-26; no production change)
+
+**Data.** E10 had prices only per gameweek, and FPL changes prices overnight. The Wayback Machine has archived the live player list (`bootstrap-static`) about twice a day since 2023 (`fpl_models.e13`).
+- One capture a day was kept, after that night's price changes, from July 2023 to May 2026: 994 captures, of which 966 fall inside a transfer window.
+- That gives 515,884 player pairs from consecutive days in the same window.
+- The archive refuses connections above ~15 requests a minute, so downloads are sequential with backoff.
+- A price change on a given player-day is rare: rises 0.2%, falls 0.5%.
+
+**1. Can the next night's change be predicted from the window so far?** Barely, from public data. The features are net transfers since the deadline, as a share of all activity and per point of ownership. The model is a monotone gradient-boosted classifier, chosen over an unconstrained one by Brier score on 2024-25 (fit on 2023-24). 2025-26 is the test.
+
+| | 2024-25 (validation) | 2025-26 (test) |
+|---|---|---|
+| P(rise) skill vs base rate | −0.04 | +0.06 |
+| P(rise) predicted / actual, top bin | 0.32 / 0.11 | 0.23 / 0.15 |
+| P(fall) skill | +0.01 | +0.02 |
+
+The predicted probabilities never reach 0.5. FPL's algorithm works on net transfers since each player's *last price change*, with thresholds and protection flags it doesn't publish, and a cumulative since-deadline count can't track that. Adding the latest day's flow and changes-so-far made the model overconfident out of sample (0.98 predicted vs 0.20 actual). That variant was also chosen after looking at both seasons, so it's reported here and rejected.
+
+**2. What is timing worth?** I took the 3,112 transfers v2's held-out season-simulation paths actually made (20 per season, 2023-26) and compared selling value at the deadline under different execution times. Buying before a rise keeps half of it (FPL's selling rule); selling before a fall saves all of it:
+
+| Execution | £m per season (95% CI) |
+|---|---|
+| at the deadline (simulator, baseline) | 0 |
+| **right after the previous deadline** | **+1.29 (+1.21, +1.37)** |
+| when the predictor says P(rise in) or P(fall out) > 0.5 | 0.00 (never triggers) |
+| best capture in hindsight (upper bound) | +1.41 (+1.34, +1.48) |
+
+- **v2 already buys risers and sells fallers.** The players it moves are the ones the crowd is moving, so executing the same transfers early captures 91% of the hindsight value.
+- **That is about +5 points a season, before costs.** Extra budget measured directly: +£2.0m from GW2 is worth +16.9 points per season (95% CI −3.0, +37.1) on the held-out seasons (`e1 play --extra-bank 20`), about 8 points per £1m. Timing gains build up through the season, averaging about £0.65m, so roughly +5 points.
+- **The cost is news.** About 1.6 transfers per season buy a player who was available at the window start but flagged by the deadline. At a few points each, that cancels most of the gain.
+- **The decisions are the deadline's.** The deadline plan already saw the whole window's crowd signal, so moving early with less information would change some decisions. This measures the value of execution timing, not of planning earlier.
+
+**Decision.** No automatic early transfers. For the live tool, show a price-watch next to each planned transfer: crowd pressure this window, the E10 gameweek-level P(rise)/P(fall), and whether the player is fit. When the buy is rising and the player is fit, suggest making the transfer early, and leave the news risk to the manager.
+
+## E15–E18: why are the top players' expected points low?
+
+**Diagnosis.**
+- £10m+ players were under-predicted 8–12% in both tuning seasons: 4.48 predicted vs 5.09 actual (2021-22), and 4.83 vs 5.24 (2022-23).
+- The 20 players ranked highest each gameweek were about calibrated, so this was a ranking bias, not a level bias.
+- Premium attackers' predicted goals matched their xG, but they score about 14% above it. Targets built purely on xG (`denoise_weight = 1`) remove that finishing skill.
+- Trees also average extreme players in with similar-looking rows.
+
+All results below are paired walk-forward backtests on the tuning seasons vs `r4_xg_1` (production). Deltas are per gameweek, with 95% CIs.
+
+| Experiment | Config | Δ regulars MAE | Δ captain pts | Δ top-11 pts | Decision |
+|---|---|---|---|---|---|
+| E15 more trees | `r9_full_800` | −0.035 | −0.98 | −1.92 | Rejected: lower MAE only by predicting less |
+| E15 | `r9_full_400` | −0.015 | −1.03 | +0.23 | Rejected |
+| E15 | `r9_lr10` | +0.001 | −0.49 | −0.80 | Rejected |
+| E16 rates given an appearance | `r10_conditional` | not backtested | | | Dropped: live predictions barely move (Haaland 4.86 → 5.12) |
+| E17 structural attack rates | `r12_structural` | −0.004 (−0.007, −0.000) | +0.63 (−0.77, +2.08) | +2.12 (−0.29, +4.52) | Over-shoots premiums (5.36 vs 5.09) |
+| E17 blend, w = 0.5 | `r12_blend` | −0.004 (−0.006, −0.002) | +0.25 (−1.01, +1.55) | +2.41 (+0.68, +4.12) | Rejected in season simulation (below) |
+| E17 blend, w = 0.25 | `r12_blend25` | −0.002 (−0.003, −0.002) | | +1.94 (+0.61, +3.37) | Rejected in season simulation: −26.9 (−50.5, −3.1) |
+| E18 targets 0.7 xG + 0.3 goals | `r13_xg_07` | −0.000 | −0.09 | +0.26 (−0.40, +0.99) | Rejected |
+| E18 targets 0.5 xG + 0.5 goals | `r13_xg_05` | −0.001 | +0.15 | −0.29 (−0.80, +0.16) | Rejected |
+
+- **MAE rewards under-prediction.** Points are right-skewed, so a model that predicts less gets a lower MAE. E15's "gains" were entirely its lower mean prediction. Decisions are judged on captain and top-11 points.
+- **E17 (`fpl_models.structural`)** builds goals and assists the way the strong public models do:
+  - a per-90 rate of 0.7 xG + 0.3 goals over recent minutes;
+  - shrunk towards a log-linear price prior per position, with the strength chosen on the newest training rows;
+  - multiplied by this fixture's team λ over the team's recent average, then by expected minutes;
+  - calibrated per position to the training totals.
+- **Blending half structural, half tree** fixes premium calibration: £10m+ players are now 4.92 vs 5.09 actual (2021-22) and 5.19 vs 5.24 (2022-23). Overall and positional calibration are unchanged.
+- **Season simulation rejects the blend:** −12.1 points per season (95% CI −34.0, +10.3), with 40 paths per season (2021-22: −29.9; 2022-23: +5.8). Hits were similar (34.0 vs 36.6 per season).
+  - The backtest's top-11 has no budget limit, so ranking premiums higher there is pure gain.
+  - With a £100m squad, valuing premiums more moves money away from depth, and the extra premium points don't cover that.
+  - Captain points, the only budget-free decision, gain just +0.25, which is not significant.
+- **A gentler blend (w = 0.25) is significantly worse in season simulation** (−26.9 per season), despite a significant top-11 gain. I stopped there rather than search more weights on the same two seasons.
+- **Lesson: budget-free top-11 points don't predict season points** for changes that re-rank players by price. Use season simulation for any change that moves premium players, and treat backtest top-11 as a screen only.
+- **E18 doesn't help:** putting actual goals back in the target barely moves premiums (4.48 → 4.48). The tree still averages them away, so the bias is structural, not about the label.
+
 ## E11: congestion across all competitions (rejected for now)
 
 **Data.** FPL-Elo-Insights publishes, under `By Tournament/`, the matches of Premier League clubs in the Champions League, Europa League, Conference League and EFL Cup, from 2025-26 only. It has no FA Cup. They're now ingested as `silver/fpl_elo_insights/cup_matches` → `fct_cup_matches`, one row per club per match.
