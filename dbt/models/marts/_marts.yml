@@ -23,6 +23,12 @@ models:
         data_tests: [unique, not_null]
       - name: season
         data_tests: [not_null]
+      - name: is_played
+        description: Final score known (FPL's provisional finish counts; bonus may still change).
+        data_tests: [not_null]
+      - name: is_provisional
+        description: Played, but FPL hasn't confirmed bonus points yet.
+        data_tests: [not_null]
       - name: home_team_key
         data_tests:
           - not_null

@@ -9,7 +9,7 @@ import dagster as dg
 import duckdb
 import polars as pl
 
-from fpl_models import optimizer, player_features, player_model, team_strength
+from fpl_models import optimizer, player_features, player_model, shadow, team_strength
 from fpl_models.backtest import Predictor
 from fpl_models.baselines import BASELINES
 from fpl_models.data import load_player_matches, next_gameweeks, player_gameweeks
@@ -239,5 +239,29 @@ def wildcard_plan(lake: Lake) -> dg.MaterializeResult[None]:
             "status": plan.status,
             "expected_points": round(plan.total_expected_points, 1),
             "plan": dg.MetadataValue.md(f"```\n{describe(plan, squads, None)}\n```"),
+        }
+    )
+
+
+@dg.asset(
+    key=["gold", "shadow", "state"],
+    deps=[expected_points, dg.AssetKey("current_squads"), dg.AssetKey("dim_gameweeks")],
+    group_name="models",
+)
+def shadow_team() -> dg.MaterializeResult[None]:
+    """The planner's own team through the live season (`fpl_models.shadow`): scores the
+    last planned gameweek once it has finished, then plans the next one."""
+    lake = Path(os.getenv("FPL_LAKE_URL", "data"))
+    if not (lake / "gold" / "shadow" / "state.json").exists():
+        # Not started (`python -m fpl_models.shadow init`): don't fail the daily build.
+        return dg.MaterializeResult(metadata={"initialised": False})
+    state = shadow.run(lake, _warehouse())
+    pending = state.pending
+    return dg.MaterializeResult(
+        metadata={
+            "points": state.total,
+            "scored_gameweeks": len(state.history),
+            "next_gameweek": pending.gameweek if pending else None,
+            "planned_expected_points": pending.expected_points if pending else None,
         }
     )

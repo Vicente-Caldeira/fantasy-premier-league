@@ -30,9 +30,13 @@ def _snapshot(
     lake: Lake,
     dataset: str,
     fetch: Callable[[], Any],
+    *,
+    refresh_today: bool = False,
 ) -> dg.MaterializeResult[None]:
     path = bronze_path(dataset, context.partition_key)
-    return take_snapshot(context, lake, path, lambda: encode_json_gz(fetch()))
+    return take_snapshot(
+        context, lake, path, lambda: encode_json_gz(fetch()), refresh_today=refresh_today
+    )
 
 
 @dg.asset(key_prefix=BRONZE, partitions_def=daily_snapshots, group_name="fpl_bronze")
@@ -48,9 +52,12 @@ def bootstrap_static(
 def fixtures(
     context: dg.AssetExecutionContext, fpl_api: FplApiResource, lake: Lake
 ) -> dg.MaterializeResult[None]:
-    """Raw `/fixtures/`: every fixture this season, with per-fixture event stats."""
+    """Raw `/fixtures/`: every fixture this season, with per-fixture event stats.
+
+    Re-runs on the same day refresh it: results land and kickoffs move during the day.
+    """
     with fpl_api.client() as client:
-        return _snapshot(context, lake, "fixtures", client.fixtures)
+        return _snapshot(context, lake, "fixtures", client.fixtures, refresh_today=True)
 
 
 @dg.asset(

@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from fpl_models import penalties, player_features, player_model, team_strength
+from fpl_models import availability, penalties, player_features, player_model, team_strength
 from fpl_models.backtest import run_backtest
 from fpl_models.data import DEFAULT_WAREHOUSE, load_player_matches, player_gameweeks
 from fpl_models.leaderboard import EVALUATION_SEASONS
@@ -129,9 +129,47 @@ EXPERIMENTS |= {
     ),
 }
 
+# Round 8 (E12): point-in-time status/news and set-piece order (vaastav's archive),
+# against production and against production x the live availability multiplier.
+_PROD = player_model.PRODUCTION.features
+EXPERIMENTS |= {
+    "r8_base": player_model.PRODUCTION,  # same runner, so the comparison is like for like
+    "r8_avail": replace(
+        player_model.PRODUCTION, features=_PROD + availability.AVAILABILITY_FEATURES
+    ),
+    "r8_pens": replace(player_model.PRODUCTION, features=_PROD + availability.SET_PIECE_FEATURES),
+    "r8_both": replace(
+        player_model.PRODUCTION,
+        features=_PROD + availability.AVAILABILITY_FEATURES + availability.SET_PIECE_FEATURES,
+    ),
+}
+
+
+# Round 9 (E15): predictions are compressed at the top (elite attackers' goals ~10%
+# low). Production stops early (~150 of 400 rounds at learning rate 0.03).
+EXPERIMENTS |= {
+    "r9_full_400": replace(player_model.PRODUCTION, early_stopping=False),
+    "r9_full_800": replace(player_model.PRODUCTION, early_stopping=False, max_iter=800),
+    "r9_lr10": replace(player_model.PRODUCTION, learning_rate=0.1),
+    # E16: per-90 rates given an appearance x expected minutes.
+    "r10_conditional": replace(player_model.PRODUCTION, conditional_rates=True),
+    "r10_conditional_full": replace(
+        player_model.PRODUCTION, conditional_rates=True, early_stopping=False
+    ),
+    # E17: structural goals/assists (shrunk per-90 rate x fixture x expected minutes).
+    "r12_structural": replace(player_model.PRODUCTION, structural_weight=1.0),
+    "r12_blend": replace(player_model.PRODUCTION, structural_weight=0.5),
+    "r12_blend25": replace(player_model.PRODUCTION, structural_weight=0.25),
+    # E18: premium attackers out-score their xG (+14%) and pure-xG targets remove
+    # finishing skill; blend actual goals back in (re-test on the fixed xG data).
+    "r13_xg_07": replace(player_model.PRODUCTION, denoise_weight=0.7),
+    "r13_xg_05": replace(player_model.PRODUCTION, denoise_weight=0.5),
+}
+
 
 def load_features(warehouse: Path) -> pl.DataFrame:
-    """Every candidate feature: fixture rows, team context, schedule and penalties."""
+    """Every candidate feature: fixture rows, team context, schedule, penalties and,
+    once `fpl_models.availability` has built the snapshots, point-in-time availability."""
     matches = team_strength.load_matches(warehouse)
     features = player_features.build_features(
         player_features.load_fixture_rows(warehouse),
@@ -142,7 +180,13 @@ def load_features(warehouse: Path) -> pl.DataFrame:
         matches, player_features.load_cup_matches(warehouse)
     )
     features = player_features.add_congestion(features, congestion)
-    return penalties.add_penalties(features, penalties.season_table(*penalties.load(warehouse)))
+    features = penalties.add_penalties(features, penalties.season_table(*penalties.load(warehouse)))
+    snapshots = Path(os.getenv("FPL_LAKE_URL", "data")) / availability.SNAPSHOT
+    if not snapshots.exists():
+        return features
+    deadlines = features.select("season", "gameweek", "deadline_utc").unique()
+    table = availability.features(availability.align(pl.read_parquet(snapshots), deadlines))
+    return availability.add_availability(features, table)
 
 
 def per_gameweek(predictions: pl.DataFrame, gameweeks: pl.DataFrame) -> pl.DataFrame:

@@ -8,6 +8,7 @@ select distinct
     opponent_team_code as away_team_code,
     team_h_score as home_goals,
     team_a_score as away_goals,
-    true as finished
+    true as finished,
+    true as finished_provisional
 from {{ source('vaastav', 'player_matches') }}
 where was_home
