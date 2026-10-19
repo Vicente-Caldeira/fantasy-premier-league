@@ -17,7 +17,9 @@ select
     latest.team_a_score as away_goals,
     latest.team_h_difficulty as home_difficulty,
     latest.team_a_difficulty as away_difficulty,
-    latest.finished
+    latest.finished,
+    -- Played, scores in, awaiting FPL's bonus confirmation (hours after full time).
+    coalesce(latest.finished_provisional, latest.finished) as finished_provisional
 from latest
 inner join teams as home on latest.team_h = home.fpl_team_id
 inner join teams as away on latest.team_a = away.fpl_team_id
