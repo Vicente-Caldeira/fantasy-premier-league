@@ -10,7 +10,7 @@ export function PointsChart({ matches, height = 140, slots = 38 }: { matches: Ma
       points: prev.points + m.points,
       xgi: prev.xgi + (m.xg ?? 0) + (m.xa ?? 0),
       minutes: prev.minutes + m.minutes,
-      label: `${prev.label ? `${prev.label}, ` : ""}${m.is_home ? m.opponent.toUpperCase().slice(0, 3) : m.opponent.slice(0, 3)}`,
+      label: `${prev.label ? `${prev.label}, ` : ""}${m.opponent.slice(0, 3).toUpperCase()} (${m.is_home ? "H" : "A"})`,
     });
   }
   if (byGw.size === 0) return <p className="text-sm text-muted">No matches yet this season.</p>;

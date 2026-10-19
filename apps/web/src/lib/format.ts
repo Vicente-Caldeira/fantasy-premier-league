@@ -45,6 +45,12 @@ export const difficultyStyle = (d: number) => ({
   color: d === 3 ? "var(--text)" : "var(--d-text-strong)",
 });
 
+/** A club's three-letter abbreviation, always in capitals. */
+export const abbr = (clubs: Record<string, Pick<Club, "short_name">>, key: string) =>
+  (clubs[key]?.short_name ?? key.slice(0, 3)).toUpperCase();
+
+export const venue = (isHome: boolean) => (isHome ? "H" : "A");
+
 export function clubMap(clubs: Club[]) {
   return Object.fromEntries(clubs.map((c) => [c.key, c])) as Record<string, Club>;
 }

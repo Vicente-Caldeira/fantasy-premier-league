@@ -178,3 +178,15 @@ def test_club_ratings_are_multipliers_around_one():
     ratings = {r["team_key"]: r for r in club_ratings(matches, KICKOFF).iter_rows(named=True)}
     assert ratings["a"]["attack"] > 1 > ratings["b"]["attack"]
     assert ratings["a"]["defence"] < 1 < ratings["b"]["defence"]
+
+
+def test_free_hit_rebuilds_the_squad_for_one_gameweek_without_hits():
+    squad_codes = squad()
+    current = client.post("/api/squad/evaluate", json={"squad": squad_codes, "horizon": 1}).json()
+    request = {"squad": squad_codes, "gameweek": 9, "bank": 20.0}
+    plan = client.post("/api/freehit", json=request).json()
+    (week,) = plan["gameweeks"]
+    assert week["gameweek"] == 9
+    assert week["hits"] == 0
+    assert week["xp"] >= current["gameweeks"][0]["xp"]  # never worse than keeping the squad
+    assert client.post("/api/freehit", json={**request, "gameweek": 30}).status_code == 422

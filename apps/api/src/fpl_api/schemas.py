@@ -223,6 +223,12 @@ class PlanRequest(SquadRequest):
     wildcard: bool = False
 
 
+class FreeHitRequest(SquadRequest):
+    gameweek: int
+    bank: float = 0.0
+    selling_prices: dict[int, float] = Field(default_factory=dict)
+
+
 class Plan(BaseModel):
     status: str
     gameweeks: list[PlannedGameweek]
