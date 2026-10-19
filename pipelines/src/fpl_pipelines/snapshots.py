@@ -47,10 +47,21 @@ def assert_live(snapshot_date: str) -> None:
 
 
 def take_snapshot(
-    context: dg.AssetExecutionContext, lake: Lake, path: str, fetch: Callable[[], bytes]
+    context: dg.AssetExecutionContext,
+    lake: Lake,
+    path: str,
+    fetch: Callable[[], bytes],
+    *,
+    refresh_today: bool = False,
 ) -> dg.MaterializeResult[None]:
-    """Write `fetch()` to `path` once; later runs of the partition reuse it."""
-    if lake.exists(path):
+    """Write `fetch()` to `path` once; later runs of the partition reuse it.
+
+    `refresh_today`: for sources that change during the day (fixtures: results, moved
+    kickoffs), a re-run on the snapshot's own date replaces it with the current state.
+    Past partitions are never rewritten.
+    """
+    today = datetime.now(UTC).date().isoformat()
+    if lake.exists(path) and not (refresh_today and context.partition_key == today):
         context.log.info("Snapshot %s already exists, reusing it", path)
         return dg.MaterializeResult(metadata={"uri": lake.uri(path), "reused": True})
     assert_live(context.partition_key)

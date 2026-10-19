@@ -269,6 +269,13 @@ class SeasonSimulator:
         return xp, upside
 
 
+def apply_availability(xp: pl.DataFrame, factors: pl.DataFrame, gameweek: int) -> pl.DataFrame:
+    """Scale expected points by availability factors (player_code, this_week, later)."""
+    joined = xp.join(factors, on="player_code", how="left")
+    factor = pl.when(pl.col("gameweek") == gameweek).then("this_week").otherwise("later")
+    return joined.with_columns(pl.col("expected_points") * factor.fill_null(1.0)).select(xp.columns)
+
+
 def play(  # noqa: PLR0913 - chip options are keyword-only
     season: str,
     weeks: list[Week],
@@ -279,6 +286,7 @@ def play(  # noqa: PLR0913 - chip options are keyword-only
     wildcards: Collection[int] = (),
     wildcard_threshold: float | None = None,
     price_moves: Mapping[int, Mapping[int, float]] | None = None,
+    availability: Mapping[int, pl.DataFrame] | None = None,
     extra_bank: int = 0,
 ) -> tuple[SeasonResult, list[PathRecord]]:
     """Manage one team through the prepared season.
@@ -294,6 +302,10 @@ def play(  # noqa: PLR0913 - chip options are keyword-only
     `price_moves` (gameweek -> player -> expected selling-value change, `prices`) is
     passed to the optimiser, which values it at `settings.value_weight`.
 
+    `availability` (gameweek -> player_code, this_week, later; E12) applies the live
+    tool's multiplier from the status at that deadline: `this_week` scales the coming
+    gameweek, `later` the rest of the horizon (0 for players who left).
+
     `extra_bank` (tenths) is added to the bank after the first squad is built: what a
     given amount of extra budget is worth in points (E13).
     """
@@ -304,6 +316,8 @@ def play(  # noqa: PLR0913 - chip options are keyword-only
     wildcard_used: set[int] = set()
     for week in weeks:
         pool, xp = week.pool, week.xp
+        if availability is not None and week.gameweek in availability:
+            xp = apply_availability(xp, availability[week.gameweek], week.gameweek)
         if squad is None and seed is not None:
             rng = np.random.default_rng(seed)
             noise = pl.DataFrame({
