@@ -17,6 +17,7 @@ from fpl_pipelines.sources import fpl_elo_insights as src
 BRONZE = ["bronze", "fpl_elo_insights"]
 SILVER = ["silver", "fpl_elo_insights"]
 MATCHES_PER_SEASON = 380
+CUP_HEADER = b"match_id,kickoff_time,finished,home_team,away_team\n"
 
 SOURCE = RepoSource("fpl_elo_insights", src.REPO, src.BRANCH, src.select_files)
 
@@ -61,6 +62,21 @@ def player_match_stats(context: dg.AssetExecutionContext, lake: Lake) -> pl.Data
     return pl.concat(
         [src.parse_player_match_stats(SOURCE.read(lake, r), season, r.gameweek or 0) for r in refs]
     )
+
+
+@silver_asset("cup_matches")
+def cup_matches(context: dg.AssetExecutionContext, lake: Lake) -> pl.DataFrame:
+    """European and domestic cup matches of Premier League clubs (2025-26 onwards; empty
+    before), for congestion and rotation features."""
+    season = context.partition_key
+    refs = SOURCE.files(lake, season, src.CUP_MATCHES)
+    frames = [
+        src.parse_cup_matches(SOURCE.read(lake, r), season, src.cup_name(r.path)) for r in refs
+    ]
+    if not frames:
+        return src.parse_cup_matches(CUP_HEADER, season, "")
+    # A match can be listed in two gameweek folders when its window is ambiguous.
+    return pl.concat(frames).unique("match_id", keep="first").sort("kickoff_time")
 
 
 @dg.asset_check(asset=matches, blocking=True, partitions_def=elo_seasons)
@@ -117,4 +133,17 @@ def player_rows_are_valid(
             "bad_minutes": bad_minutes,
             "negative_counts": negative,
         },
+    )
+
+
+@dg.asset_check(asset=cup_matches, blocking=True, partitions_def=elo_seasons)
+def cup_matches_involve_league_clubs(cup_matches: pl.DataFrame) -> dg.AssetCheckResult:
+    """Every cup match involves a Premier League club and appears once."""
+    orphans = cup_matches.filter(
+        pl.col("home_team_code").is_null() & pl.col("away_team_code").is_null()
+    ).height
+    duplicates = cup_matches.height - cup_matches["match_id"].n_unique()
+    return dg.AssetCheckResult(
+        passed=orphans == duplicates == 0,
+        metadata={"rows": cup_matches.height, "orphans": orphans, "duplicates": duplicates},
     )

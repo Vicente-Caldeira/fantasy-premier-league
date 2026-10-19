@@ -69,6 +69,11 @@ OPTA_FEATURES = tuple(f"{s}_per90" for s in OPTA_STATS)
 SCHEDULE_FEATURES = (
     "team_rest_days", "opponent_rest_days", "team_matches_prev_14d", "opponent_matches_prev_14d",
 )  # fmt: skip
+# All competitions (E11): league plus cup and European matches, 2025-26 onwards.
+CONGESTION_FEATURES = (
+    "team_all_rest_days", "team_all_days_to_next", "team_all_matches_prev_14d",
+    "team_days_since_europe", "team_days_to_europe",
+)  # fmt: skip
 
 TARGETS = (
     "minutes",
@@ -274,6 +279,100 @@ def schedule_features(matches: pl.DataFrame) -> pl.DataFrame:
         .join(recent, on=["team_key", "kickoff_utc"], how="left")
         .select("match_key", "team_key", "rest_days", pl.col("matches_prev_14d").cast(pl.Int64))
     )
+
+
+EUROPEAN = ("Champions League", "Europa League", "Conference League")
+# After a season's last recorded cup match, cup coverage is unknown (upstream lacks the
+# 2025-26 knockout rounds), so later league rows get nulls rather than "no cup games".
+COVERAGE_GRACE = pl.duration(days=7)
+
+
+def load_cup_matches(warehouse: Path) -> pl.DataFrame:
+    """Cup and European matches per Premier League club (empty if not ingested)."""
+    with duckdb.connect(str(warehouse), read_only=True) as connection:
+        connection.execute("set TimeZone = 'UTC'")
+        tables = {t for (t,) in connection.sql("show tables").fetchall()}
+        if "fct_cup_matches" not in tables:
+            return pl.DataFrame(
+                schema={"season": pl.String, "competition": pl.String,
+                        "kickoff_utc": pl.Datetime("us", "UTC"), "team_key": pl.String}
+            )  # fmt: skip
+        return connection.sql(
+            "select season, competition, kickoff_utc, team_key from fct_cup_matches"
+        ).pl()
+
+
+def congestion_features(matches: pl.DataFrame, cups: pl.DataFrame) -> pl.DataFrame:
+    """Per (match_key, team_key) league fixture, from the schedule in *all* competitions:
+
+        all_rest_days         days since the team's previous match, league or cup
+        all_days_to_next      days until its next match, league or cup
+        all_matches_prev_14d  matches in any competition in the 14 days before
+        days_since_europe     days since its last European match
+        days_to_europe        days until its next European match
+
+    Cup kickoffs are scheduled in advance, so this is pre-deadline information. Seasons
+    without cup data (before 2025-26) and league fixtures after a season's last recorded
+    cup match (plus a week) are null: the model can't tell "no cup games" from "no data".
+    """
+    league = pl.concat(
+        [
+            matches.select(
+                "match_key", "season", "kickoff_utc", pl.col(f"{side}_team_key").alias("team_key")
+            )
+            for side in ("home", "away")
+        ]
+    ).with_columns(competition=pl.lit("league"))
+    cup = cups.select(
+        pl.lit(None, pl.String).alias("match_key"), "season", "kickoff_utc", "team_key",
+        "competition",
+    )  # fmt: skip
+    sides = (
+        pl.concat([league, cup.cast(league.schema)])
+        .drop_nulls("kickoff_utc")
+        .sort("team_key", "kickoff_utc")
+    )
+    kickoff = pl.col("kickoff_utc")
+    europe = pl.when(pl.col("competition").is_in(EUROPEAN)).then(kickoff)
+
+    def days(later: pl.Expr, earlier: pl.Expr) -> pl.Expr:
+        return (later - earlier).dt.total_hours() / 24
+
+    recent = sides.rolling("kickoff_utc", period="14d", closed="left", group_by="team_key").agg(
+        pl.len().alias("all_matches_prev_14d")
+    )
+    covered = cups.group_by("season").agg(
+        (pl.col("kickoff_utc").max() + COVERAGE_GRACE).alias("coverage_end")
+    )
+    features = ("all_rest_days", "all_days_to_next", "all_matches_prev_14d",
+                "days_since_europe", "days_to_europe")  # fmt: skip
+    return (
+        sides.with_columns(
+            all_rest_days=days(kickoff, kickoff.shift(1)).over("team_key"),
+            all_days_to_next=days(kickoff.shift(-1), kickoff).over("team_key"),
+            # Within the season: the previous season's coverage may be incomplete.
+            days_since_europe=days(kickoff, europe.shift(1).forward_fill()).over(
+                "team_key", "season"
+            ),
+            days_to_europe=days(europe.shift(-1).backward_fill(), kickoff).over(
+                "team_key", "season"
+            ),
+        )
+        .join(recent.unique(["team_key", "kickoff_utc"]), on=["team_key", "kickoff_utc"])
+        .filter(pl.col("competition") == "league")
+        .join(covered, on="season", how="left")
+        .with_columns(
+            pl.when(pl.col("kickoff_utc") <= pl.col("coverage_end")).then(pl.col(c)).alias(c)
+            for c in features
+        )
+        .select("match_key", "team_key", *features)
+    )
+
+
+def add_congestion(rows: pl.DataFrame, congestion: pl.DataFrame) -> pl.DataFrame:
+    """Join the team's all-competition congestion (`congestion_features`) as team_*."""
+    renamed = congestion.rename({c: f"team_{c}" for c in congestion.columns[2:]})
+    return rows.join(renamed, on=["match_key", "team_key"], how="left", maintain_order="left")
 
 
 def add_schedule(rows: pl.DataFrame, schedule: pl.DataFrame) -> pl.DataFrame:
