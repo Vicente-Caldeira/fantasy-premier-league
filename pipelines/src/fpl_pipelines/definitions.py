@@ -1,6 +1,7 @@
 """Dagster definitions for the FPL platform."""
 
 import os
+from datetime import UTC, datetime
 
 import dagster as dg
 from dagster_dbt import DbtCliResource
@@ -34,6 +35,29 @@ daily_snapshot_job = dg.define_asset_job(
         "vaastav_bronze",
     )
     - dg.AssetSelection.assets(football_data.season_results, football_data.matches),
+)
+
+# Intra-day: results land and kickoffs move between daily snapshots. Refresh today's
+# fixtures snapshot, then the match mart and the fixture expectations built on it
+# (staging/intermediate models are views, so only the mart table needs rebuilding).
+fixtures_refresh_job = dg.define_asset_job(
+    "fixtures_refresh",
+    selection=dg.AssetSelection.assets(fpl_api.fixtures, fpl_api.fixtures_table),
+)
+matches_refresh_job = dg.define_asset_job(
+    "matches_refresh",
+    selection=dg.AssetSelection.keys("fct_matches", "gold/team_strength/fixture_lambdas"),
+)
+
+
+@dg.schedule(job=fixtures_refresh_job, cron_schedule="15 */2 * * *", execution_timezone="UTC")
+def fixtures_refresh_schedule() -> dg.RunRequest:
+    """Every two hours: today's fixtures partition, re-fetched."""
+    return dg.RunRequest(partition_key=datetime.now(UTC).date().isoformat())
+
+
+matches_refresh_schedule = dg.ScheduleDefinition(
+    job=matches_refresh_job, cron_schedule="35 */2 * * *", execution_timezone="UTC"
 )
 
 season_refresh_job = dg.define_asset_job(
@@ -98,6 +122,8 @@ defs = dg.Definitions(
         vaastav_history_job,
         understat_refresh_job,
         warehouse_job,
+        fixtures_refresh_job,
+        matches_refresh_job,
     ],
     schedules=[
         # 06:00 UTC: after overnight price changes, before most news breaks.
@@ -106,6 +132,8 @@ defs = dg.Definitions(
         elo_insights_refresh_schedule,
         understat_refresh_schedule,
         warehouse_schedule,
+        fixtures_refresh_schedule,
+        matches_refresh_schedule,
     ],
     resources={
         "fpl_api": FplApiResource(),
