@@ -11,7 +11,8 @@ with fixtures as (
         away_team_code,
         home_goals,
         away_goals,
-        finished
+        finished,
+        finished_provisional
     from {{ ref('stg_fpl__fixtures') }}
 ),
 

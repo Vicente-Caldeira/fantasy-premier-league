@@ -32,6 +32,7 @@ select
     fpl.gameweek,
     fpl.kickoff_utc as fpl_kickoff_utc,
     fpl.finished as fpl_finished,
+    fpl.finished_provisional as fpl_finished_provisional,
     fpl.home_goals as fpl_home_goals,
     fpl.away_goals as fpl_away_goals,
 
