@@ -16,12 +16,14 @@ export function PlayerPhoto({ code, name, size = 40 }: { code: number; name: str
     .map((w) => w[0]?.toUpperCase())
     .join("");
   return (
+    // A fixed-size block whose children are all absolutely positioned: no in-flow text,
+    // so the box and its baseline are identical with or without a photo.
     <span
-      className="relative inline-grid shrink-0 place-items-center overflow-hidden rounded-full bg-surface-2 text-muted"
+      className="relative block shrink-0 overflow-hidden rounded-full bg-surface-2 align-middle text-muted"
       style={{ width: size, height: size, fontSize: Math.max(9, size / 3) }}
     >
       {failed ? (
-        <span className="font-semibold">{initials}</span>
+        <span className="absolute inset-0 grid place-items-center leading-none font-semibold">{initials}</span>
       ) : (
         <Image
           src={photoUrl(code)}

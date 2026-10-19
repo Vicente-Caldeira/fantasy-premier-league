@@ -5,7 +5,7 @@ import { Suspense } from "react";
 import { PointsChart } from "@/components/charts";
 import { Bar, ClubBadge, FixtureCell, PlayerPhoto, PriceMove, SectionTitle, Skeleton, Stat, StatusPill } from "@/components/ui";
 import { api, ApiError } from "@/lib/api";
-import { clubMap, lensFor, money, pct, STATUS_LABEL } from "@/lib/format";
+import { abbr, clubMap, lensFor, money, pct, STATUS_LABEL, venue } from "@/lib/format";
 import type { MatchRow } from "@/lib/types";
 
 const per90 = (value: number, minutes: number) => (minutes > 0 ? ((value / minutes) * 90).toFixed(2) : "–");
@@ -30,7 +30,7 @@ function MatchLog({ matches, clubs }: { matches: MatchRow[]; clubs: Record<strin
             <tr key={`${m.season}-${m.gameweek}-${m.opponent}`} className="border-b border-border/60 text-right last:border-0">
               <td className="num py-1.5 text-left text-muted">{m.gameweek}</td>
               <td className="py-1.5 pl-2 text-left">
-                {clubs[m.opponent]?.short_name ?? m.opponent} <span className="text-faint">({m.is_home ? "H" : "A"})</span>
+                {abbr(clubs, m.opponent)} <span className="text-faint">({venue(m.is_home)})</span>
               </td>
               <td className={`num py-1.5 pl-3 ${m.minutes === 0 ? "text-faint" : ""}`}>{m.minutes}</td>
               <td className={`num py-1.5 pl-3 font-semibold ${m.points >= 10 ? "text-accent-text" : ""}`}>{m.points}</td>
@@ -93,6 +93,12 @@ async function Profile({ params }: { params: Promise<{ code: string }> }) {
               <span className="flex items-center gap-1">
                 Price tonight <PriceMove player={p} />
               </span>
+              <Link
+                href={`/compare?p=${p.code}`}
+                className="rounded-md border border-border px-2 py-0.5 text-xs text-text hover:border-accent"
+              >
+                Compare
+              </Link>
             </div>
           </div>
           <div className="grid grid-cols-2 gap-x-8 gap-y-3 sm:grid-cols-4">

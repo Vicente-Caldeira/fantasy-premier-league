@@ -4,6 +4,7 @@ import Link from "next/link";
 export { PlayerPhoto } from "@/components/photo";
 
 import {
+  abbr,
   badgeUrl,
   difficulty,
   difficultyStyle,
@@ -11,6 +12,7 @@ import {
   type Lens,
   pct,
   STATUS_LABEL,
+  venue,
 } from "@/lib/format";
 import type { Club, Player } from "@/lib/types";
 
@@ -53,7 +55,7 @@ export function FixtureCell({
     <span className="flex h-6 gap-px overflow-hidden rounded">
       {fixtures.map((f) => {
         const d = difficulty(f, lens);
-        const short = clubs[f.opponent]?.short_name ?? f.opponent.slice(0, 3).toUpperCase();
+        const short = abbr(clubs, f.opponent);
         const title = `${clubs[f.opponent]?.name ?? f.opponent} (${f.is_home ? "home" : "away"}) · ${
           lens === "attack" ? `${f.goals_for.toFixed(2)} xG for` : `${pct(f.clean_sheet)} clean sheet`
         }`;
@@ -62,11 +64,14 @@ export function FixtureCell({
             key={`${f.gameweek}-${f.opponent}`}
             title={title}
             style={difficultyStyle(d)}
-            className={`flex flex-1 items-center justify-center font-medium tracking-tight ${
+            className={`flex min-w-0 flex-1 items-center justify-center gap-0.5 overflow-hidden font-medium tracking-tight whitespace-nowrap ${
               compact ? "px-0.5 text-[10px]" : "px-1 text-[11px]"
             }`}
           >
-            {f.is_home ? short : short.toLowerCase()}
+            {short}
+            <span className="text-[0.85em] font-normal opacity-75">
+              {compact ? venue(f.is_home) : `(${venue(f.is_home)})`}
+            </span>
           </span>
         );
       })}

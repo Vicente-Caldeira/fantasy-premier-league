@@ -6,10 +6,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { Pitch, type PitchSlot } from "@/components/my-team/pitch";
 import { PlayerPhoto } from "@/components/photo";
 import { ClubBadge, FixtureCell, PriceMove, StatusPill } from "@/components/ui";
-import { clubMap, compact, lensFor, money, pct, signed } from "@/lib/format";
+import { abbr, clubMap, compact, lensFor, money, pct, signed } from "@/lib/format";
+import { ENTRY_KEY, post } from "@/lib/client";
 import type { Club, Entry, Meta, Plan, Player } from "@/lib/types";
 
-const ENTRY_KEY = "xpts.entry";
 const HIT = 4;
 
 interface Swap {
@@ -29,15 +29,6 @@ function pairTransfers(outs: number[], ins: number[], byCode: Map<number, Player
   return pairs;
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`/api${path}`, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) throw new Error((await response.json().catch(() => null))?.detail ?? response.statusText);
-  return (await response.json()) as T;
-}
 
 function EntryForm({ onSubmit, error, loading }: { onSubmit: (id: number) => void; error: string | null; loading: boolean }) {
   const [value, setValue] = useState("");
@@ -463,7 +454,7 @@ function PlayerPanel({
             <StatusPill player={p} />
           </div>
           <div className="flex items-center gap-1 text-xs text-muted">
-            <ClubBadge club={club} size={12} /> {club?.short_name} · {p.position} · {money(p.price)}
+            <ClubBadge club={club} size={12} /> {abbr(clubs, p.team_key)} · {p.position} · {money(p.price)}
             {Math.abs(sell - p.price) >= 0.05 ? <> · sells {money(sell)}</> : null}
           </div>
         </div>
@@ -594,7 +585,7 @@ function Replacements({
                   </span>
                   <span className="flex items-center gap-1 text-[11px] text-muted">
                     <ClubBadge club={club} size={11} />
-                    {club?.short_name} · {money(p.price)} · {p.ownership.toFixed(1)}%
+                    {abbr(clubs, p.team_key)} · {money(p.price)} · {p.ownership.toFixed(1)}%
                     {!clubOk ? " · 3 from club" : !affordable ? " · too expensive" : ""}
                   </span>
                 </span>

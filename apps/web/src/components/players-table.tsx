@@ -3,8 +3,9 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
+import { compareHref, MAX_COMPARE } from "@/components/compare";
 import { ClubBadge, FixtureCell, PlayerPhoto, PriceMove, StatusPill } from "@/components/ui";
-import { clubMap, compact, lensFor, money, pct, POSITIONS } from "@/lib/format";
+import { abbr, clubMap, compact, lensFor, money, pct, POSITIONS } from "@/lib/format";
 import type { Club, Player, Position } from "@/lib/types";
 
 type SortKey =
@@ -69,6 +70,15 @@ export function PlayersTable({ players, clubs, horizon }: { players: Player[]; c
   const [availableOnly, setAvailableOnly] = useState(false);
   const [sort, setSort] = useState<{ key: SortKey; desc: boolean }>({ key: "xp_total", desc: true });
   const [limit, setLimit] = useState(PAGE);
+  const [picked, setPicked] = useState<number[]>([]);
+  const togglePick = (code: number) =>
+    setPicked((current) =>
+      current.includes(code)
+        ? current.filter((c) => c !== code)
+        : current.length < MAX_COMPARE
+          ? [...current, code]
+          : current,
+    );
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -145,7 +155,14 @@ export function PlayersTable({ players, clubs, horizon }: { players: Player[]; c
         <table className="w-full min-w-[1100px] text-sm">
           <thead>
             <tr className="border-b border-border text-left">
-              <th className="label sticky left-0 bg-surface py-2 pr-2 pl-3 font-medium">Player</th>
+              <th className="label sticky left-0 z-10 bg-surface py-2 pr-2 pl-3 font-medium">
+                <span className="flex items-center gap-2.5">
+                  <span className="w-4" title={`Tick up to ${MAX_COMPARE} players to compare`}>
+                    ⇄
+                  </span>
+                  Player
+                </span>
+              </th>
               {COLUMNS.map((c) => (
                 <th key={c.key} className="py-2 pr-3 text-right" title={c.title}>
                   <button
@@ -167,7 +184,16 @@ export function PlayersTable({ players, clubs, horizon }: { players: Player[]; c
               const club = byKey[p.team_key];
               return (
                 <tr key={p.code} className="group border-b border-border/60 last:border-0 hover:bg-surface-2/60">
-                  <td className="sticky left-0 bg-surface py-1.5 pr-2 pl-3 group-hover:bg-surface-2">
+                  <td className="sticky left-0 z-10 bg-surface py-1.5 pr-2 pl-3 group-hover:bg-surface-2">
+                    <span className="flex items-center gap-2.5">
+                    <input
+                      type="checkbox"
+                      checked={picked.includes(p.code)}
+                      onChange={() => togglePick(p.code)}
+                      disabled={!picked.includes(p.code) && picked.length >= MAX_COMPARE}
+                      aria-label={`Compare ${p.name}`}
+                      className="h-4 w-4 shrink-0 accent-[var(--accent)]"
+                    />
                     <Link href={`/players/${p.code}`} className="flex items-center gap-2.5">
                       <PlayerPhoto code={p.code} name={p.name} size={32} />
                       <span className="min-w-0">
@@ -177,10 +203,11 @@ export function PlayersTable({ players, clubs, horizon }: { players: Player[]; c
                         </span>
                         <span className="flex items-center gap-1 text-xs text-muted">
                           <ClubBadge club={club} size={12} />
-                          {club?.short_name} · {p.position}
+                          {abbr(byKey, p.team_key)} · {p.position}
                         </span>
                       </span>
                     </Link>
+                    </span>
                   </td>
                   <td className="num py-1.5 pr-3 text-right">{p.price.toFixed(1)}</td>
                   <td className="num py-1.5 pr-3 text-right text-muted">{p.ownership.toFixed(1)}%</td>
@@ -218,6 +245,19 @@ export function PlayersTable({ players, clubs, horizon }: { players: Player[]; c
         <span>
           {rows.length} players · horizon GW{horizon[0]}–{horizon[horizon.length - 1]}
         </span>
+        {picked.length ? (
+          <span className="flex items-center gap-3">
+            <button onClick={() => setPicked([])} className="hover:text-text">
+              Clear
+            </button>
+            <Link
+              href={compareHref(picked)}
+              className="rounded-md bg-accent px-2.5 py-1 font-medium text-black"
+            >
+              Compare {picked.length}
+            </Link>
+          </span>
+        ) : null}
         {rows.length > limit ? (
           <button onClick={() => setLimit((l) => l + PAGE)} className="font-medium text-accent-text hover:underline">
             Show more

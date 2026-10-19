@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useMemo, useState } from "react";
 
 import { ClubBadge, OutcomeBar } from "@/components/ui";
-import { clubMap, difficultyStyle, pct } from "@/lib/format";
+import { abbr, clubMap, difficultyStyle, pct, venue } from "@/lib/format";
 import type { Club, ClubFixture, Fixture } from "@/lib/types";
 
 type Mode = "attack" | "defence" | "win";
@@ -127,8 +127,9 @@ export function FixtureTicker({ clubs, fixtures, gameweeks }: { clubs: Club[]; f
                                 className="flex flex-1 flex-col items-center justify-center leading-none"
                                 title={`${opp?.name} (${f.is_home ? "H" : "A"}) · xG ${f.goals_for.toFixed(2)}–${f.goals_against.toFixed(2)} · CS ${pct(f.clean_sheet)} · W ${pct(f.win)}`}
                               >
-                                <span className="text-[11px] font-semibold">
-                                  {f.is_home ? opp?.short_name : opp?.short_name.toLowerCase()}
+                                <span className="text-[11px] font-semibold whitespace-nowrap">
+                                  {abbr(byKey, f.opponent)}
+                                  <span className="ml-0.5 text-[0.85em] font-normal opacity-75">({venue(f.is_home)})</span>
                                 </span>
                                 {showValues ? <span className="num mt-0.5 text-[10px] opacity-80">{fmt(v, mode)}</span> : null}
                               </div>
@@ -145,7 +146,7 @@ export function FixtureTicker({ clubs, fixtures, gameweeks }: { clubs: Club[]; f
           </table>
         </div>
         <p className="border-t border-border px-3 py-2 text-xs text-faint">
-          From the team model: bookmaker odds where priced, attack/defence ratings beyond. Uppercase = home.
+          From the team model: bookmaker odds where priced, attack/defence ratings beyond. (H) home, (A) away.
         </p>
       </div>
 
@@ -181,13 +182,13 @@ export function FixtureTicker({ clubs, fixtures, gameweeks }: { clubs: Club[]; f
                 <div className="mt-3 grid grid-cols-[1fr_auto_1fr] items-center gap-2">
                   <Link href={`/clubs/${m.home}`} className="flex items-center gap-2 font-medium hover:text-accent-text">
                     <ClubBadge club={home} size={22} />
-                    <span className="truncate">{home?.short_name}</span>
+                    <span className="truncate">{abbr(byKey, m.home)}</span>
                   </Link>
                   <span className="num text-sm text-muted">
                     {m.lambda_home?.toFixed(1)} – {m.lambda_away?.toFixed(1)}
                   </span>
                   <Link href={`/clubs/${m.away}`} className="flex items-center justify-end gap-2 font-medium hover:text-accent-text">
-                    <span className="truncate">{away?.short_name}</span>
+                    <span className="truncate">{abbr(byKey, m.away)}</span>
                     <ClubBadge club={away} size={22} />
                   </Link>
                 </div>
@@ -201,7 +202,7 @@ export function FixtureTicker({ clubs, fixtures, gameweeks }: { clubs: Club[]; f
                 </div>
                 <div className="num mt-3 grid grid-cols-3 border-t border-border pt-2 text-center text-[11px]">
                   <span>
-                    <span className="block text-muted">CS {home?.short_name}</span>
+                    <span className="block text-muted">CS {abbr(byKey, m.home)}</span>
                     {pct(m.home_clean_sheet)}
                   </span>
                   <span>
@@ -209,7 +210,7 @@ export function FixtureTicker({ clubs, fixtures, gameweeks }: { clubs: Club[]; f
                     {pct(m.over_2_5)}
                   </span>
                   <span>
-                    <span className="block text-muted">CS {away?.short_name}</span>
+                    <span className="block text-muted">CS {abbr(byKey, m.away)}</span>
                     {pct(m.away_clean_sheet)}
                   </span>
                 </div>

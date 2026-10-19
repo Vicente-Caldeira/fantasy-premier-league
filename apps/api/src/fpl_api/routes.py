@@ -313,8 +313,13 @@ def build_router(get_store: Callable[[], Store]) -> APIRouter:  # noqa: PLR0915 
             ],
         )
 
-    def solve(snap: Snapshot, request: schemas.SquadRequest, **kwargs: Any) -> schemas.Plan:  # noqa: ANN401
-        gameweeks = snap.horizon[: request.horizon]
+    def solve(
+        snap: Snapshot,
+        request: schemas.SquadRequest,
+        gameweeks: list[int] | None = None,
+        **kwargs: Any,  # noqa: ANN401
+    ) -> schemas.Plan:
+        gameweeks = gameweeks or snap.horizon[: request.horizon]
         unknown = set(request.squad) - set(snap.players["player_code"])
         if unknown:
             raise HTTPException(422, f"unknown players: {sorted(unknown)}")
@@ -365,6 +370,18 @@ def build_router(get_store: Callable[[], Store]) -> APIRouter:  # noqa: PLR0915 
             bank=round(request.bank * 10), free_transfers=request.free_transfers,
             selling_prices={c: round(p * 10) for c, p in request.selling_prices.items()},
             keep=request.keep, ban=request.ban, wildcard=request.wildcard,
+        )  # fmt: skip
+
+    @router.post("/freehit", tags=["team"])
+    def free_hit(request: schemas.FreeHitRequest, snap: Snap) -> schemas.Plan:
+        """The best squad for one gameweek with a free hit: unlimited free transfers within
+        the squad's selling value plus the bank; the squad reverts afterwards."""
+        if request.gameweek not in snap.horizon:
+            raise HTTPException(422, f"gameweek {request.gameweek} not in {snap.horizon}")
+        return solve(
+            snap, request, [request.gameweek],
+            bank=round(request.bank * 10), free_transfers=1, wildcard=True,
+            selling_prices={c: round(p * 10) for c, p in request.selling_prices.items()},
         )  # fmt: skip
 
     return router
