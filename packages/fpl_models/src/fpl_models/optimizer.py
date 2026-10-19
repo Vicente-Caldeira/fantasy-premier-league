@@ -9,14 +9,16 @@ XI and a captain to maximise discounted expected points, subject to FPL's rules:
                gameweek, none in a wildcard week); each transfer beyond the free ones
                costs 4 points
 
-Free-transfer banking is `ft' = min(5, ft - free_used + 1)`. Having more free transfers
-is never worse, so upper bounds alone reproduce the min at the optimum. Hits are exact:
+Free-transfer banking is exactly `ft' = min(5, ft - free_used + 1)` (one binary per
+gameweek), so even a time-limited solution follows FPL's rule. Hits are exact:
 `paid = max(transfers - ft, 0)`, one binary per gameweek, because FPL spends free
 transfers first (a solver may otherwise "buy" a hit to keep free transfers banked).
 
 Prices are assumed constant over the horizon. FPL sells at purchase price plus half
 of any rise; purchase prices aren't public, so selling prices default to current
-prices unless given.
+prices unless given. Optionally, `price_moves` (expected change in each player's
+selling value by the next deadline, tenths) is valued at `Settings.value_weight`
+points per tenth, so the plan avoids holding fallers and favours risers (E10).
 
 Every solution is checked against the rules by `validate`, independently of the
 model's constraints.
@@ -52,6 +54,9 @@ class Settings:
     # are noisy and the optimiser picks the most over-estimated ones (winner's curse),
     # so treating hits as dearer than 4 points can raise realised points.
     hit_penalty: float = HIT_COST
+    # Points per 0.1m of expected selling-value change by the next deadline (E10).
+    # 0 ignores price moves.
+    value_weight: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -132,6 +137,8 @@ def optimise(  # noqa: PLR0912, PLR0913, PLR0915 - one MIP, kept in one place
     prune: bool = True,
     keep: Sequence[int] = (),
     ban: Sequence[int] = (),
+    wildcard: bool = False,
+    price_moves: Mapping[int, float] | None = None,
 ) -> Plan:
     """Optimal plan over the gameweeks in `expected_points`.
 
@@ -141,6 +148,10 @@ def optimise(  # noqa: PLR0912, PLR0913, PLR0915 - one MIP, kept in one place
                       in which case `bank` is ignored and the budget is 100.0m.
     prune:            drop dominated players first (see `candidate_pool`).
     keep / ban:       players that must be in / out of the squad every gameweek.
+    wildcard:         play the wildcard chip in the first gameweek: any number of
+                      transfers from `current_squad`, no hits, banked transfers kept.
+    price_moves:      player_code -> expected selling-value change (tenths) of holding
+                      him through the first gameweek; weighted by `settings.value_weight`.
     """
     if set(keep) & set(ban):
         raise InfeasibleError(f"players both kept and banned: {sorted(set(keep) & set(ban))}")
@@ -211,7 +222,7 @@ def optimise(  # noqa: PLR0912, PLR0913, PLR0915 - one MIP, kept in one place
         transfers = solver.Sum(bought[p, t] for p in codes)
         if t == 0:
             solver.Add(ft[t] == free_transfers)
-        if t == 0 and from_scratch:
+        if t == 0 and (from_scratch or wildcard):
             solver.Add(paid[t] == 0)
             free_used = solver.Sum([])  # wildcard: transfers don't use free transfers
         else:
@@ -226,9 +237,17 @@ def optimise(  # noqa: PLR0912, PLR0913, PLR0915 - one MIP, kept in one place
             solver.Add(free_used >= 0)
         if t + 1 < len(gameweeks):
             # A wildcard keeps banked transfers but earns no +1 that gameweek.
-            earned = 0 if t == 0 and from_scratch else 1
-            solver.Add(ft[t + 1] <= ft[t] - free_used + earned)
+            earned = 0 if t == 0 and (from_scratch or wildcard) else 1
+            # Exactly min(MAX, ft - used + earned). Upper bounds alone are enough at
+            # the optimum, but a time-limited (feasible, not optimal) solution could
+            # under-count free transfers and pay hits FPL wouldn't charge.
+            rolled = ft[t] - free_used + earned
+            capped = solver.BoolVar(f"ft_capped_{t}")
+            big = MAX_FREE_TRANSFERS + SQUAD_SIZE + 1
+            solver.Add(ft[t + 1] <= rolled)
             solver.Add(ft[t + 1] <= MAX_FREE_TRANSFERS)
+            solver.Add(ft[t + 1] >= rolled - big * capped)
+            solver.Add(ft[t + 1] >= MAX_FREE_TRANSFERS - big * (1 - capped))
 
     objective = (
         solver.Sum(
@@ -247,6 +266,10 @@ def optimise(  # noqa: PLR0912, PLR0913, PLR0915 - one MIP, kept in one place
         - settings.hit_penalty * solver.Sum(paid)
         - TRANSFER_TIEBREAK * solver.Sum(bought.values())
     )
+    if price_moves and settings.value_weight:
+        objective += settings.value_weight * solver.Sum(
+            price_moves.get(p, 0.0) * squad[p, 0] for p in codes
+        )
     solver.Maximize(objective)
     status = solver.Solve()
     if status not in (pywraplp.Solver.OPTIMAL, pywraplp.Solver.FEASIBLE):
@@ -256,8 +279,7 @@ def optimise(  # noqa: PLR0912, PLR0913, PLR0915 - one MIP, kept in one place
         return [p for p in codes if var[p, t].solution_value() > 0.5]
 
     plan = []
-    # The solver's ft variables are only upper-bounded (enough for optimal decisions),
-    # so report free transfers by replaying FPL's rule on the transfers actually made.
+    # Report free transfers by replaying FPL's rule on the transfers actually made.
     available = free_transfers
     for t, gw in enumerate(gameweeks):
         starters = chosen(lineup, t)
@@ -279,9 +301,9 @@ def optimise(  # noqa: PLR0912, PLR0913, PLR0915 - one MIP, kept in one place
                 + xp.get((cap, gw), 0.0),
             )
         )
-        wildcard = t == 0 and from_scratch
+        free_week = t == 0 and (from_scratch or wildcard)
         used = len(plan[-1].transfers_in) - plan[-1].hits
-        available = available if wildcard else min(MAX_FREE_TRANSFERS, available - used + 1)
+        available = available if free_week else min(MAX_FREE_TRANSFERS, available - used + 1)
     result = Plan(
         gameweeks=plan,
         objective=solver.Objective().Value(),
@@ -289,7 +311,8 @@ def optimise(  # noqa: PLR0912, PLR0913, PLR0915 - one MIP, kept in one place
         bank=[round(m.solution_value()) for m in money],
     )
     validate(result, players, current_squad=current_squad, bank=bank,
-             free_transfers=free_transfers, selling_prices=sell, keep=keep, ban=ban)  # fmt: skip
+             free_transfers=free_transfers, selling_prices=sell, keep=keep, ban=ban,
+             wildcard=wildcard)  # fmt: skip
     return result
 
 
@@ -307,6 +330,7 @@ def validate(  # noqa: PLR0912, PLR0913 - one rule per branch, deliberately expl
     selling_prices: Mapping[int, int],
     keep: Sequence[int] = (),
     ban: Sequence[int] = (),
+    wildcard: bool = False,
 ) -> None:
     """Check a plan against FPL's rules, independently of how it was produced."""
     info = {r["player_code"]: r for r in players.iter_rows(named=True)}
@@ -337,8 +361,9 @@ def validate(  # noqa: PLR0912, PLR0913 - one rule per branch, deliberately expl
             raise RuleViolationError(
                 f"GW{gw.gameweek}: reports {gw.free_transfers} free, rules say {ft}"
             )
-        wildcard = i == 0 and current_squad is None
-        if not wildcard:
+        if i == 0 and current_squad is None:
+            money -= sum(info[p]["price"] for p in gw.squad)  # new squad: ft unchanged
+        else:
             if squad is None:  # pragma: no cover - unreachable: set on every gameweek
                 raise RuleViolationError("no previous squad")
             if set(gw.transfers_in) != set(gw.squad) - set(squad) or set(gw.transfers_out) != set(
@@ -348,13 +373,13 @@ def validate(  # noqa: PLR0912, PLR0913 - one rule per branch, deliberately expl
             money += sum(selling_prices.get(p, info[p]["price"]) for p in gw.transfers_out)
             money -= sum(info[p]["price"] for p in gw.transfers_in)
             used = len(gw.transfers_in)
-            if gw.hits != max(used - ft, 0):
+            chip = i == 0 and wildcard
+            if gw.hits != (0 if chip else max(used - ft, 0)):
                 raise RuleViolationError(
                     f"GW{gw.gameweek}: {used} transfers with {ft} free -> hits {gw.hits}"
                 )
-            ft = min(MAX_FREE_TRANSFERS, ft - (used - gw.hits) + 1)
-        else:
-            money -= sum(info[p]["price"] for p in gw.squad)  # wildcard: ft unchanged
+            if not chip:  # a wildcard keeps banked transfers and earns none
+                ft = min(MAX_FREE_TRANSFERS, ft - (used - gw.hits) + 1)
         if money < 0:
             raise RuleViolationError(f"GW{gw.gameweek}: over budget by {-money}")
         squad = gw.squad

@@ -108,3 +108,17 @@ def test_play_records_every_gameweek_and_seeds_change_the_start():
         tuple(sorted(ss.play("2021-22", weeks, settings, seed=s)[1][0].squad)) for s in range(4)
     }
     assert len(starts) > 1  # different seeds, different starting squads
+
+
+def test_wildcard_is_played_once_per_half_and_takes_no_hits():
+    weeks = synthetic_weeks(n_weeks=4)
+    settings = optimizer.Settings(time_limit_seconds=10)
+    _, records = ss.play("2021-22", weeks, settings, seed=0, wildcards=(2, 3))
+    chips = [r.chip for r in records]
+    assert chips == [None, "wildcard", None, None]  # GW3 is in the same half: no second
+    assert records[1].hits == 0
+    # Threshold rule: an impossible bar never plays it; a zero bar plays it at once.
+    _, never = ss.play("2021-22", weeks, settings, seed=0, wildcard_threshold=1e9)
+    _, eager = ss.play("2021-22", weeks, settings, seed=0, wildcard_threshold=0.0)
+    assert all(r.chip is None for r in never)
+    assert [r.chip for r in eager] == [None, "wildcard", None, None]

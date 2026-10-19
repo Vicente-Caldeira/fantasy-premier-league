@@ -1,4 +1,14 @@
 -- Historical player-fixture rows, 2016-17 .. 2025-26 (teams already fixture-derived).
+-- FPL published expected stats from 2022-23 GW16; earlier 2022-23 rows carry 0.0 for
+-- every player, which would read as "no chance of scoring". A gameweek with no
+-- expected goals anywhere is treated as missing.
+with source as (
+    select
+        *,
+        sum(expected_goals) over (partition by season, round) as gameweek_expected_goals
+    from {{ source('vaastav', 'player_matches') }}
+)
+
 select
     season,
     element,
@@ -29,10 +39,11 @@ select
     creativity,
     threat,
     ict_index,
-    expected_goals,
-    expected_assists,
-    expected_goal_involvements,
-    expected_goals_conceded,
+    case when gameweek_expected_goals > 0 then expected_goals end as expected_goals,
+    case when gameweek_expected_goals > 0 then expected_assists end as expected_assists,
+    case when gameweek_expected_goals > 0 then expected_goal_involvements end
+        as expected_goal_involvements,
+    case when gameweek_expected_goals > 0 then expected_goals_conceded end as expected_goals_conceded,
     tackles,
     clearances_blocks_interceptions,
     recoveries,
@@ -43,4 +54,4 @@ select
     transfers_balance,
     transfers_in,
     transfers_out
-from {{ source('vaastav', 'player_matches') }}
+from source

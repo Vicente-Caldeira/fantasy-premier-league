@@ -18,8 +18,10 @@ The first deadline builds the squad from scratch. Chips aren't used.
 """
 
 from collections import Counter
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from functools import partial
 
 import numpy as np
 import polars as pl
@@ -103,6 +105,11 @@ class PathRecord:
     vice_captain: int
     hits: int
     points: int  # after hits
+    chip: str | None = None
+
+
+# Chips can be played once in each half of the season (2025-26 rules).
+FIRST_HALF_END = 19
 
 
 @dataclass
@@ -262,24 +269,35 @@ class SeasonSimulator:
         return xp, upside
 
 
-def play(
+def play(  # noqa: PLR0913 - chip options are keyword-only
     season: str,
     weeks: list[Week],
     settings: optimizer.Settings,
     *,
     seed: int | None = None,
     start_noise: float = 0.3,
+    wildcards: Collection[int] = (),
+    wildcard_threshold: float | None = None,
+    price_moves: Mapping[int, Mapping[int, float]] | None = None,
 ) -> tuple[SeasonResult, list[PathRecord]]:
     """Manage one team through the prepared season.
 
     With `seed`, the first squad is built from noisy expected points (each player's
     multiplied by exp(N(0, start_noise))), so different seeds give different but
     reasonable starting squads: independent paths through the same season.
+
+    Wildcard (once per half): played in the listed `wildcards` gameweeks, or, with
+    `wildcard_threshold`, at the first deadline where the wildcard plan's objective
+    beats the normal plan's by at least that much.
+
+    `price_moves` (gameweek -> player -> expected selling-value change, `prices`) is
+    passed to the optimiser, which values it at `settings.value_weight`.
     """
     result, records = SeasonResult(season), []
     squad: list[int] | None = None
     bank, free_transfers = 0, 1
     paid: dict[int, int] = {}
+    wildcard_used: set[int] = set()
     for week in weeks:
         pool, xp = week.pool, week.xp
         if squad is None and seed is not None:
@@ -295,15 +313,27 @@ def play(
             )
         price = dict(zip(pool["player_code"], pool["price"], strict=True))
         sell = {p: selling_price(paid[p], price[p]) for p in squad or []}
-        plan = optimizer.optimise(
-            pool.select("player_code", "position", "team_key", "price"),
-            xp,
-            current_squad=squad,
-            bank=bank,
-            free_transfers=free_transfers,
-            selling_prices=sell,
-            settings=settings,
-        )
+        players = pool.select("player_code", "position", "team_key", "price")
+
+        solve = partial(
+            optimizer.optimise, players, xp, current_squad=squad, bank=bank,
+            free_transfers=free_transfers, selling_prices=sell, settings=settings,
+            price_moves=(price_moves or {}).get(week.gameweek),
+        )  # fmt: skip
+
+        half = 1 if week.gameweek <= FIRST_HALF_END else 2
+        can_wildcard = squad is not None and half not in wildcard_used
+        chip = None
+        if can_wildcard and week.gameweek in wildcards:
+            chip, plan = "wildcard", solve(wildcard=True)
+        else:
+            plan = solve()
+            if can_wildcard and wildcard_threshold is not None:
+                rebuilt = solve(wildcard=True)
+                if rebuilt.objective - plan.objective >= wildcard_threshold:
+                    chip, plan = "wildcard", rebuilt
+        if chip:
+            wildcard_used.add(half)
         step = plan.gameweeks[0]
         if squad is None:
             bank = optimizer.BUDGET - sum(price[p] for p in step.squad)
@@ -316,7 +346,8 @@ def play(
                 paid.pop(p)
             paid |= {p: price[p] for p in step.transfers_in}
             used = len(step.transfers_in) - step.hits
-            free_transfers = min(optimizer.MAX_FREE_TRANSFERS, free_transfers - used + 1)
+            if chip is None:  # a wildcard keeps banked transfers and earns none
+                free_transfers = min(optimizer.MAX_FREE_TRANSFERS, free_transfers - used + 1)
 
         position = dict(zip(pool["player_code"], pool["position"], strict=True))
         this_week = {p: v for p, g, v in week.xp.iter_rows() if g == week.gameweek}
@@ -338,6 +369,7 @@ def play(
                 step.vice_captain,
                 step.hits,
                 points,
+                chip,
             )
         )
         squad = step.squad

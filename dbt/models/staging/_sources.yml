@@ -67,6 +67,11 @@ sources:
         meta:
           external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/understat/team_matches/*/data.parquet', hive_partitioning = false, union_by_name = true)"
           dagster: {asset_key: [silver, understat, team_matches]}
+      - name: player_seasons
+        description: Season totals per player (xG, npxG, goals, non-penalty goals, minutes).
+        meta:
+          external_location: "read_parquet('{{ env_var(\"FPL_LAKE_URL\", \"../data\") }}/silver/understat/player_seasons/*/data.parquet', hive_partitioning = false, union_by_name = true)"
+          dagster: {asset_key: [silver, understat, player_seasons]}
 
   - name: fpl_elo_insights
     description: FPL-Elo-Insights Opta-style match stats, 2024-25 onwards.
