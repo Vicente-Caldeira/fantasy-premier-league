@@ -74,6 +74,27 @@ CONGESTION_FEATURES = (
     "team_all_rest_days", "team_all_days_to_next", "team_all_matches_prev_14d",
     "team_days_since_europe", "team_days_to_europe",
 )  # fmt: skip
+# A player's form and load across all competitions (E11b), 2025-26 onwards. "Short":
+# windows up to 14 days and EWM with a 4-match half-life; "long" adds 28 days,
+# season-to-date and a 15-match half-life.
+ALL_COMP_STATS = ("xg", "xa", "shots", "box_touches", "chances_created")
+ALL_COMP_HALF_LIVES = {"short": 4.0, "long": 15.0}
+ALL_COMP_WINDOWS = {"short": ("7d", "14d"), "long": ("28d", "season")}
+FATIGUE_SHORT = (
+    "ac_minutes_7d", "ac_minutes_14d", "ac_minutes_share_7d", "ac_minutes_share_14d",
+    "ac_last_minutes", "ac_days_since_appearance",
+)  # fmt: skip
+FATIGUE_LONG = (
+    "ac_minutes_28d", "ac_minutes_season", "ac_minutes_share_28d", "ac_minutes_share_season",
+)  # fmt: skip
+FORM_SHORT = tuple(
+    [f"ac_{s}_per90_hl4" for s in ALL_COMP_STATS] + [f"ac_{s}_per90_14d" for s in ALL_COMP_STATS]
+)
+FORM_LONG = tuple(
+    [f"ac_{s}_per90_hl15" for s in ALL_COMP_STATS]
+    + [f"ac_{s}_per90_{w}" for w in ("28d", "season") for s in ALL_COMP_STATS]
+)
+ALL_COMP_FEATURES = FATIGUE_SHORT + FATIGUE_LONG + FORM_SHORT + FORM_LONG
 
 TARGETS = (
     "minutes",
@@ -373,6 +394,233 @@ def add_congestion(rows: pl.DataFrame, congestion: pl.DataFrame) -> pl.DataFrame
     """Join the team's all-competition congestion (`congestion_features`) as team_*."""
     renamed = congestion.rename({c: f"team_{c}" for c in congestion.columns[2:]})
     return rows.join(renamed, on=["match_key", "team_key"], how="left", maintain_order="left")
+
+
+# Canonical stat -> (league fixture-row column, cup appearance column).
+_ALL_COMP_SOURCES = {
+    "xg": ("expected_goals", "xg"),
+    "xa": ("expected_assists", "xa"),
+    "shots": ("total_shots", "total_shots"),
+    "box_touches": ("touches_opposition_box", "touches_opposition_box"),
+    "chances_created": ("chances_created", "chances_created"),
+}
+_WINDOW_DAYS = {"7d": 7, "14d": 14, "28d": 28}
+# After a season's last recorded cup appearance, coverage is unknown: null, not zero.
+ALL_COMP_COVERAGE_GRACE = pl.duration(days=10)
+MIN_WINDOW_MINUTES = 45  # a per-90 rate over fewer minutes is mostly noise
+
+
+def load_cup_player_matches(warehouse: Path) -> pl.DataFrame:
+    """Players' cup and European appearances (empty if not ingested)."""
+    with duckdb.connect(str(warehouse), read_only=True) as connection:
+        connection.execute("set TimeZone = 'UTC'")
+        tables = {t for (t,) in connection.sql("show tables").fetchall()}
+        if "fct_cup_player_matches" not in tables:
+            return pl.DataFrame(
+                schema={"season": pl.String, "kickoff_utc": pl.Datetime("us", "UTC"),
+                        "player_code": pl.Int64, "minutes": pl.Int64,
+                        **{cup: pl.Float64 for _, cup in _ALL_COMP_SOURCES.values()}}
+            )  # fmt: skip
+        return connection.sql(
+            "select season, kickoff_utc, player_code, minutes, xg, xa, total_shots,"
+            " touches_opposition_box, chances_created from fct_cup_player_matches"
+        ).pl()
+
+
+def _asof(
+    targets: pl.DataFrame, table: pl.DataFrame, at: str, by: list[str], suffix: str
+) -> pl.DataFrame:
+    """Join `table`'s state as of strictly before each target's `at` time."""
+    right = table.rename({c: f"{c}{suffix}" for c in table.columns if c not in by})
+    return targets.sort(at).join_asof(
+        right.sort(f"kickoff_utc{suffix}"),
+        left_on=at,
+        right_on=f"kickoff_utc{suffix}",
+        by=by,
+        strategy="backward",
+        allow_exact_matches=False,
+    )
+
+
+def all_competition_features(
+    rows: pl.DataFrame, cup_players: pl.DataFrame, cups: pl.DataFrame
+) -> pl.DataFrame:
+    """Per (match_key, player_code): form and load over league *and* cup matches played
+    before the deadline (E11b).
+
+        ac_minutes_{7d,14d,28d,season}        minutes in all competitions
+        ac_minutes_share_{...}                those minutes / (90 x the club's matches)
+        ac_last_minutes                       minutes in his club's last match (league
+                                              or a cup match he played)
+        ac_days_since_appearance              days from his last appearance to kickoff
+        ac_<stat>_per90_{14d,28d,season}      per-90 rates over the window
+        ac_<stat>_per90_hl{4,15}              EWM per-90 over appearances (half-life in
+                                              matches), stats xG, xA, shots, box
+                                              touches, chances created
+
+    League xG/xA are FPL's (Opta), the rest Opta via FPL-Elo-Insights (2024-25+); cup
+    stats exist from 2025-26. Outside cup coverage every feature is null: the model
+    can't tell "no cup games" from "no data". `eval_cup_minutes_prev_6d` (cup minutes in
+    the 6 days before kickoff, known at the deadline) is for evaluation, not a feature.
+    """
+    stats = list(_ALL_COMP_SOURCES)
+    league = rows.select(
+        "player_code", "season", "kickoff_utc",
+        pl.col("minutes").cast(pl.Float64),
+        *[pl.col(src).cast(pl.Float64).alias(s) for s, (src, _) in _ALL_COMP_SOURCES.items()],
+        pl.lit(value=False).alias("is_cup"),
+    )  # fmt: skip
+    cup = cup_players.select(
+        "player_code", "season", "kickoff_utc",
+        pl.col("minutes").cast(pl.Float64),
+        *[pl.col(src).cast(pl.Float64).alias(s) for s, (_, src) in _ALL_COMP_SOURCES.items()],
+        pl.lit(value=True).alias("is_cup"),
+    )  # fmt: skip
+    matches = (
+        pl.concat([league, cup.cast(league.schema)])
+        .with_columns(pl.col(*stats).fill_null(0.0))
+        .sort("player_code", "kickoff_utc")
+    )
+    cum = matches.with_columns(
+        *[pl.col(c).cum_sum().over("player_code").alias(f"c_{c}") for c in ["minutes", *stats]],
+        *[
+            pl.col(c).cum_sum().over("player_code", "season").alias(f"s_{c}")
+            for c in ["minutes", *stats]
+        ],
+        pl.when(pl.col("is_cup")).then(pl.col("minutes")).otherwise(0.0)
+        .cum_sum().over("player_code").alias("c_cup_minutes"),
+    )  # fmt: skip
+    apps = matches.filter(pl.col("minutes") > 0)
+    ewm = apps.with_columns(
+        *[
+            (
+                pl.col(s).ewm_mean(half_life=h).over("player_code")
+                / pl.col("minutes").ewm_mean(half_life=h).over("player_code")
+                * 90
+            ).alias(f"ac_{s}_per90_hl{h:g}")
+            for h in ALL_COMP_HALF_LIVES.values()
+            for s in stats
+        ]
+    ).select("player_code", "kickoff_utc", pl.col("^ac_.*$"))
+
+    # The club's matches in all competitions, for minutes shares.
+    club = (
+        pl.concat(
+            [
+                rows.select("team_key", "season", "kickoff_utc").unique(),
+                cups.select("team_key", "season", "kickoff_utc").drop_nulls(),
+            ]
+        )
+        .unique()
+        .sort("team_key", "kickoff_utc")
+        .with_columns(
+            n=pl.int_range(1, pl.len() + 1).over("team_key"),
+            sn=pl.int_range(1, pl.len() + 1).over("team_key", "season"),
+        )
+    )
+
+    targets = rows.select(
+        "match_key", "player_code", "season", "team_key", "kickoff_utc", "deadline_utc"
+    ).unique(["match_key", "player_code"])
+    targets = targets.with_columns(
+        *[(pl.col("deadline_utc") - pl.duration(days=d)).alias(f"at_{w}")
+          for w, d in _WINDOW_DAYS.items()],
+        (pl.col("kickoff_utc") - pl.duration(days=6)).alias("at_6d_before_kickoff"),
+    )  # fmt: skip
+    cum_cols = ["kickoff_utc", "minutes", "c_minutes", "c_cup_minutes", *[f"c_{s}" for s in stats]]
+    t = _asof(targets, cum.select("player_code", *cum_cols), "deadline_utc", ["player_code"], "_dl")
+    season_cols = ["kickoff_utc", "s_minutes", *[f"s_{s}" for s in stats]]
+    t = _asof(
+        t, cum.select("player_code", "season", *season_cols),
+        "deadline_utc", ["player_code", "season"], "_season",
+    )  # fmt: skip
+    for w in _WINDOW_DAYS:
+        t = _asof(
+            t, cum.select("player_code", "kickoff_utc", "c_minutes", *[f"c_{s}" for s in stats]),
+            f"at_{w}", ["player_code"], f"_{w}",
+        )  # fmt: skip
+    t = _asof(
+        t, cum.select("player_code", "kickoff_utc", "c_cup_minutes"),
+        "at_6d_before_kickoff", ["player_code"], "_6d",
+    )  # fmt: skip
+    t = _asof(t, ewm, "deadline_utc", ["player_code"], "_app")
+    for w in [*_WINDOW_DAYS, "season"]:
+        at = "deadline_utc" if w == "season" else f"at_{w}"
+        clubs = club.select("team_key", "kickoff_utc", "n")
+        if w == "season":
+            joined = _asof(
+                t.select("match_key", "player_code", "team_key", "season", "deadline_utc"),
+                club.select("team_key", "season", "kickoff_utc", "sn"),
+                "deadline_utc",
+                ["team_key", "season"],
+                "_club",
+            ).select(
+                "match_key", "player_code", pl.col("sn_club").fill_null(0).alias("club_season")
+            )
+        else:
+            now = _asof(
+                t.select("match_key", "player_code", "team_key", "deadline_utc"),
+                clubs.select("team_key", "kickoff_utc", "n"),
+                "deadline_utc",
+                ["team_key"],
+                "_now",
+            )
+            then = _asof(
+                t.select("match_key", "player_code", "team_key", at),
+                clubs.select("team_key", "kickoff_utc", "n"),
+                at,
+                ["team_key"],
+                "_then",
+            )
+            joined = now.join(then, on=["match_key", "player_code"]).select(
+                "match_key", "player_code",
+                (pl.col("n_now").fill_null(0) - pl.col("n_then").fill_null(0)).alias(f"club_{w}"),
+            )  # fmt: skip
+        t = t.join(joined, on=["match_key", "player_code"], how="left")
+
+    def window(col: str, w: str) -> pl.Expr:
+        if w == "season":
+            return pl.col(f"s_{col}_season").fill_null(0.0)
+        return pl.col(f"c_{col}_dl").fill_null(0.0) - pl.col(f"c_{col}_{w}").fill_null(0.0)
+
+    def per90(stat: str, w: str) -> pl.Expr:
+        minutes = window("minutes", w)
+        return pl.when(minutes >= MIN_WINDOW_MINUTES).then(window(stat, w) / minutes * 90)
+
+    def share(w: str) -> pl.Expr:
+        club_matches = pl.col(f"club_{w}")
+        return pl.when(club_matches > 0).then(window("minutes", w) / (90 * club_matches))
+
+    features = t.select(
+        "match_key", "player_code", "season", "deadline_utc",
+        *[window("minutes", w).alias(f"ac_minutes_{w}") for w in [*_WINDOW_DAYS, "season"]],
+        *[share(w).alias(f"ac_minutes_share_{w}") for w in [*_WINDOW_DAYS, "season"]],
+        pl.col("minutes_dl").alias("ac_last_minutes"),
+        ((pl.col("kickoff_utc") - pl.col("kickoff_utc_app")).dt.total_hours() / 24)
+        .alias("ac_days_since_appearance"),
+        *[per90(s, w).alias(f"ac_{s}_per90_{w}") for w in ("14d", "28d", "season") for s in stats],
+        *[pl.col(f"ac_{s}_per90_hl{h:g}_app").alias(f"ac_{s}_per90_hl{h:g}")
+          for h in ALL_COMP_HALF_LIVES.values() for s in stats],
+        (pl.col("c_cup_minutes_dl").fill_null(0.0) - pl.col("c_cup_minutes_6d").fill_null(0.0))
+        .alias("eval_cup_minutes_prev_6d"),
+    )  # fmt: skip
+    covered = cup_players.group_by("season").agg(
+        (pl.col("kickoff_utc").max() + ALL_COMP_COVERAGE_GRACE).alias("coverage_end")
+    )
+    names = [c for c in features.columns if c.startswith(("ac_", "eval_"))]
+    return (
+        features.join(covered, on="season", how="left")
+        .with_columns(
+            pl.when(pl.col("deadline_utc") <= pl.col("coverage_end")).then(pl.col(c)).alias(c)
+            for c in names
+        )
+        .select("match_key", "player_code", *names)
+    )
+
+
+def add_all_competition(rows: pl.DataFrame, features: pl.DataFrame) -> pl.DataFrame:
+    """Join `all_competition_features` onto fixture rows."""
+    return rows.join(features, on=["match_key", "player_code"], how="left", maintain_order="left")
 
 
 def add_schedule(rows: pl.DataFrame, schedule: pl.DataFrame) -> pl.DataFrame:

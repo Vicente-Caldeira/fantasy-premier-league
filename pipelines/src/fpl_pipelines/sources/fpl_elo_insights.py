@@ -6,10 +6,13 @@ Layouts:
     2024-2025       data/2024-2025/<dataset>/GW<n>/<dataset>.csv
     2025-2026 ..    data/<season>/By Tournament/Premier League/GW<n>/<dataset>.csv
                     data/<season>/By Tournament/<cup>/GW<n>/matches.csv   (`cup_matches`)
+                    data/<season>/By Tournament/<cup>/GW<n>/playermatchstats.csv
+                                                            (`cup_player_match_stats`)
 
 Cup files (European competitions and domestic cups, 2025-26 onwards) list only matches
 involving a Premier League club, grouped by the league gameweek they fall in; foreign
-clubs have no team code.
+clubs have no team code. Cup player stats cover only the Premier League sides' players;
+`player_id` is the season's FPL element id, as in the league files.
 
 The repo has no license, so its data is ingested for personal use and never committed.
 """
@@ -35,10 +38,13 @@ FIRST_SEASON = 2024
 DATASETS = ("matches", "playermatchstats")
 CUPS = ("Champions League", "Europa League", "Conference League", "EFL Cup", "FA Cup")
 CUP_MATCHES = "cup_matches"
+CUP_PLAYER_STATS = "cup_player_match_stats"
 
 _LEGACY = re.compile(r"^data/(\d{4})-(\d{4})/(\w+)/GW(\d+)/(\w+)\.csv$")
 _CURRENT = re.compile(r"^data/(\d{4})-(\d{4})/By Tournament/Premier League/GW(\d+)/(\w+)\.csv$")
-_CUP = re.compile(r"^data/(\d{4})-(\d{4})/By Tournament/([^/]+)/GW(\d+)/matches\.csv$")
+_CUP = re.compile(
+    r"^data/(\d{4})-(\d{4})/By Tournament/([^/]+)/GW(\d+)/(matches|playermatchstats)\.csv$"
+)
 
 
 def _season(start: str, end: str) -> str:
@@ -56,13 +62,13 @@ def select_files(tree: list[dict[str, Any]]) -> list[FileRef]:
             start, end, gw, name = m.groups()
             dataset = name
         elif (m := _CUP.match(path)) and m.group(3) in CUPS:
-            start, end, _, gw = m.groups()
-            dataset = CUP_MATCHES
+            start, end, _, gw, name = m.groups()
+            dataset = CUP_MATCHES if name == "matches" else CUP_PLAYER_STATS
         elif (m := _LEGACY.match(path)) and m.group(3) == m.group(5):
             start, end, dataset, gw, _ = m.groups()
         else:
             continue
-        if dataset in (*DATASETS, CUP_MATCHES) and int(start) >= FIRST_SEASON:
+        if dataset in (*DATASETS, CUP_MATCHES, CUP_PLAYER_STATS) and int(start) >= FIRST_SEASON:
             refs.append(FileRef(_season(start, end), dataset, path, entry["sha"], int(gw)))
     return sorted(refs, key=lambda r: (r.season, r.dataset, r.gameweek or 0))
 
@@ -170,9 +176,9 @@ def parse_matches(data: bytes, season: str) -> pl.DataFrame:
 
 
 def cup_name(path: str) -> str:
-    """The competition of a cup_matches file, from its path."""
+    """The competition of a cup file, from its path."""
     if not (m := _CUP.match(path)):
-        raise ContractError(f"not a cup matches file: {path}")
+        raise ContractError(f"not a cup file: {path}")
     return m.group(3)
 
 
@@ -198,3 +204,12 @@ def parse_cup_matches(data: bytes, season: str, competition: str) -> pl.DataFram
     return out.filter(
         pl.col("kickoff_time").is_not_null() & ~pl.col("match_id").str.contains("/", literal=True)
     )
+
+
+def parse_cup_player_match_stats(
+    data: bytes, season: str, gameweek: int, competition: str
+) -> pl.DataFrame:
+    """Per-player stats of Premier League players in a cup match (same contract as the
+    league's `playermatchstats`), tagged with the competition."""
+    stats = parse_player_match_stats(data, season, gameweek)
+    return stats.select("season", pl.lit(competition).alias("competition"), pl.exclude("season"))

@@ -167,6 +167,28 @@ EXPERIMENTS |= {
 }
 
 
+# Round 11 (E11b): players' form and load across all competitions (cup stats from
+# 2025-26; evaluated like E11, see `fpl_models.e11b`). Ablation: windows up to 14 days
+# and a 4-match half-life vs. all windows (adding 28 days, season, 15-match half-life).
+EXPERIMENTS |= {
+    "r11_fatigue": replace(
+        player_model.PRODUCTION,
+        features=_PROD + player_features.FATIGUE_SHORT + player_features.FATIGUE_LONG,
+    ),
+    "r11_form": replace(
+        player_model.PRODUCTION,
+        features=_PROD + player_features.FORM_SHORT + player_features.FORM_LONG,
+    ),
+    "r11_both_short": replace(
+        player_model.PRODUCTION,
+        features=_PROD + player_features.FATIGUE_SHORT + player_features.FORM_SHORT,
+    ),
+    "r11_both_all": replace(
+        player_model.PRODUCTION, features=_PROD + player_features.ALL_COMP_FEATURES
+    ),
+}
+
+
 def load_features(warehouse: Path) -> pl.DataFrame:
     """Every candidate feature: fixture rows, team context, schedule, penalties and,
     once `fpl_models.availability` has built the snapshots, point-in-time availability."""
@@ -176,10 +198,13 @@ def load_features(warehouse: Path) -> pl.DataFrame:
         player_features.match_lambdas(matches),
         player_features.schedule_features(matches),
     )
-    congestion = player_features.congestion_features(
-        matches, player_features.load_cup_matches(warehouse)
-    )
+    cups = player_features.load_cup_matches(warehouse)
+    congestion = player_features.congestion_features(matches, cups)
     features = player_features.add_congestion(features, congestion)
+    all_comp = player_features.all_competition_features(
+        features, player_features.load_cup_player_matches(warehouse), cups
+    )
+    features = player_features.add_all_competition(features, all_comp)
     features = penalties.add_penalties(features, penalties.season_table(*penalties.load(warehouse)))
     snapshots = Path(os.getenv("FPL_LAKE_URL", "data")) / availability.SNAPSHOT
     if not snapshots.exists():
