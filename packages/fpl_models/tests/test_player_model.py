@@ -271,6 +271,37 @@ def test_schedule_counts_rest_days_and_recent_matches():
     assert x["c"]["matches_prev_14d"] == 2
 
 
+def test_congestion_counts_cup_matches_and_is_null_without_cup_coverage():
+    day = timedelta(days=1)
+    matches = pl.DataFrame({
+        "match_key": ["old", "a", "b", "late"],
+        "season": ["2024-25", "2025-26", "2025-26", "2025-26"],
+        "kickoff_utc": [START - 300 * day, START, START + 7 * day, START + 60 * day],
+        "home_team_key": ["x", "x", "y", "x"], "away_team_key": ["y", "y", "x", "z"],
+    })  # fmt: skip
+    cups = pl.DataFrame({
+        "season": ["2025-26", "2025-26"], "competition": ["Champions League", "EFL Cup"],
+        "kickoff_utc": [START + 3 * day, START + 10 * day], "team_key": ["x", "x"],
+    })  # fmt: skip
+    out = pf.congestion_features(matches, cups)
+    x = {r["match_key"]: r for r in out.filter(pl.col("team_key") == "x").iter_rows(named=True)}
+    assert x["a"]["all_days_to_next"] == pytest.approx(3.0)  # the Champions League match
+    assert x["a"]["days_to_europe"] == pytest.approx(3.0)
+    assert x["b"]["all_rest_days"] == pytest.approx(4.0)  # since the Champions League match
+    assert x["b"]["days_since_europe"] == pytest.approx(4.0)
+    assert x["b"]["all_days_to_next"] == pytest.approx(3.0)  # the EFL Cup match
+    assert x["b"]["days_to_europe"] is None  # no later European match
+    assert x["b"]["all_matches_prev_14d"] == 2
+    assert x["old"]["all_rest_days"] is None  # 2024-25: no cup data
+    assert x["late"]["all_rest_days"] is None  # after the last recorded cup match + a week
+    # Teams without cup matches still get league-only values in covered seasons.
+    y = {r["match_key"]: r for r in out.filter(pl.col("team_key") == "y").iter_rows(named=True)}
+    assert y["b"]["all_rest_days"] == pytest.approx(7.0)
+    assert y["b"]["days_since_europe"] is None
+    rows = pl.DataFrame({"match_key": ["b"], "team_key": ["x"]})
+    assert pf.add_congestion(rows, out)["team_all_rest_days"].item() == pytest.approx(4.0)
+
+
 def test_reconcile_makes_player_goals_add_up_to_the_team():
     rows = pl.DataFrame({"match_key": ["m"] * 3, "team_key": ["t"] * 3, "team_lambda": [2.0] * 3})
     events = pl.DataFrame({"e_goals_scored": [0.3, 0.1, 0.0], "e_assists": [0.1, 0.1, 0.2]})

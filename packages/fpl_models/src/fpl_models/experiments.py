@@ -120,6 +120,15 @@ EXPERIMENTS |= {
     "r6_iter800": replace(player_model.PRODUCTION, max_iter=800),
 }
 
+# Round 7 (E11): congestion across all competitions (cup data from 2025-26 only, so it
+# is evaluated on 2026-27 and, separately labelled, 2025-26; see `fpl_models.e11`).
+EXPERIMENTS |= {
+    "r7_congestion": replace(
+        player_model.PRODUCTION,
+        features=player_model.PRODUCTION.features + player_features.CONGESTION_FEATURES,
+    ),
+}
+
 # Round 8 (E12): point-in-time status/news and set-piece order (vaastav's archive),
 # against production and against production x the live availability multiplier.
 _PROD = player_model.PRODUCTION.features
@@ -167,6 +176,10 @@ def load_features(warehouse: Path) -> pl.DataFrame:
         player_features.match_lambdas(matches),
         player_features.schedule_features(matches),
     )
+    congestion = player_features.congestion_features(
+        matches, player_features.load_cup_matches(warehouse)
+    )
+    features = player_features.add_congestion(features, congestion)
     features = penalties.add_penalties(features, penalties.season_table(*penalties.load(warehouse)))
     snapshots = Path(os.getenv("FPL_LAKE_URL", "data")) / availability.SNAPSHOT
     if not snapshots.exists():

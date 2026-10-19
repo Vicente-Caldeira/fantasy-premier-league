@@ -559,6 +559,30 @@ All results below are paired walk-forward backtests on the tuning seasons vs `r4
 - **Lesson: budget-free top-11 points don't predict season points** for changes that re-rank players by price. Use season simulation for any change that moves premium players, and treat backtest top-11 as a screen only.
 - **E18 doesn't help:** putting actual goals back in the target barely moves premiums (4.48 → 4.48). The tree still averages them away, so the bias is structural, not about the label.
 
+## E11: congestion across all competitions (rejected for now)
+
+**Data.** FPL-Elo-Insights publishes, under `By Tournament/`, the matches of Premier League clubs in the Champions League, Europa League, Conference League and EFL Cup, from 2025-26 only. It has no FA Cup. They're now ingested as `silver/fpl_elo_insights/cup_matches` → `fct_cup_matches`, one row per club per match.
+- Upstream has no kickoff times for the 2025-26 European knockout rounds or the EFL Cup final, and lists undecided ties as placeholders. Neither can be placed in time (a file's league gameweek only pins a match to ±3.5 days), so both are dropped.
+- 2025-26 cup coverage therefore ends in early February. For 2026-27, the schedule is known through January.
+
+**Features** (`player_features.congestion_features`), per league fixture and team:
+- days since the previous match and until the next one, in any competition;
+- matches in the previous 14 days;
+- days since and until a European match.
+
+They're null where cup coverage is missing: before 2025-26, and after a season's last recorded cup match plus a week. The model can then tell "no data" apart from "no cup games".
+
+**Protocol.** The tuning seasons (2021-23) have no cup data. The primary window is therefore the current season, 2026-27 (6 scored gameweeks). 2025-26 is a held-out season and is reported separately. `fpl_models.e11` runs a walk-forward `r7_congestion` (production + the five features) against production on the same data:
+
+| Window | Δ regulars MAE | Δ captain pts/GW | Δ top-11 pts/GW | Minutes log loss, all | Minutes log loss, ≥ 7.5m with Europe within 4 days |
+|---|---|---|---|---|---|
+| 2026-27 (6 GWs) | −0.0030 (−0.0095, +0.0035) | +0.17 (0.00, +0.50) | −1.08 (−7.0, +5.0) | 0.5626 → 0.5629 | 0.310 → 0.328 (n = 28) |
+| 2025-26 (38 GWs, held out) | +0.0003 (−0.0039, +0.0044) | −0.25 (−1.24, +0.82) | **−2.43 (−4.61, −0.21)** | 0.4355 → 0.4368 | 0.587 → 0.586 (n = 196) |
+
+- **No gain, and a small loss on 2025-26's top 11. Production is unchanged.**
+- The model has barely any rows to learn rotation from. Training covers four seasons, but only the latest half-season has cup data. A premium player near a European match is also rare: 196 fixtures in all of 2025-26.
+- The data stays ingested and the features stay available. The test is worth repeating once 2026-27 is complete (two seasons with cup coverage). The ingested schedule can also feed the web app's fixture view directly.
+
 ## Tried and rejected
 
 | Change | Tuning-season result | Decision |

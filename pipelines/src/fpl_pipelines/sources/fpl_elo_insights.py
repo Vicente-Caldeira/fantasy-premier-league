@@ -5,6 +5,11 @@ The repo updates twice daily; bronze snapshots it via `fpl_pipelines.github_repo
 Layouts:
     2024-2025       data/2024-2025/<dataset>/GW<n>/<dataset>.csv
     2025-2026 ..    data/<season>/By Tournament/Premier League/GW<n>/<dataset>.csv
+                    data/<season>/By Tournament/<cup>/GW<n>/matches.csv   (`cup_matches`)
+
+Cup files (European competitions and domestic cups, 2025-26 onwards) list only matches
+involving a Premier League club, grouped by the league gameweek they fall in; foreign
+clubs have no team code.
 
 The repo has no license, so its data is ingested for personal use and never committed.
 """
@@ -28,9 +33,12 @@ REPO = "olbauday/FPL-Elo-Insights"
 BRANCH = "main"
 FIRST_SEASON = 2024
 DATASETS = ("matches", "playermatchstats")
+CUPS = ("Champions League", "Europa League", "Conference League", "EFL Cup", "FA Cup")
+CUP_MATCHES = "cup_matches"
 
 _LEGACY = re.compile(r"^data/(\d{4})-(\d{4})/(\w+)/GW(\d+)/(\w+)\.csv$")
 _CURRENT = re.compile(r"^data/(\d{4})-(\d{4})/By Tournament/Premier League/GW(\d+)/(\w+)\.csv$")
+_CUP = re.compile(r"^data/(\d{4})-(\d{4})/By Tournament/([^/]+)/GW(\d+)/matches\.csv$")
 
 
 def _season(start: str, end: str) -> str:
@@ -38,7 +46,7 @@ def _season(start: str, end: str) -> str:
 
 
 def select_files(tree: list[dict[str, Any]]) -> list[FileRef]:
-    """Premier League per-gameweek files for the datasets we ingest."""
+    """Premier League per-gameweek files for the datasets we ingest, plus cup matches."""
     refs = []
     for entry in tree:
         if entry.get("type") != "blob":
@@ -47,11 +55,14 @@ def select_files(tree: list[dict[str, Any]]) -> list[FileRef]:
         if m := _CURRENT.match(path):
             start, end, gw, name = m.groups()
             dataset = name
+        elif (m := _CUP.match(path)) and m.group(3) in CUPS:
+            start, end, _, gw = m.groups()
+            dataset = CUP_MATCHES
         elif (m := _LEGACY.match(path)) and m.group(3) == m.group(5):
             start, end, dataset, gw, _ = m.groups()
         else:
             continue
-        if dataset in DATASETS and int(start) >= FIRST_SEASON:
+        if dataset in (*DATASETS, CUP_MATCHES) and int(start) >= FIRST_SEASON:
             refs.append(FileRef(_season(start, end), dataset, path, entry["sha"], int(gw)))
     return sorted(refs, key=lambda r: (r.season, r.dataset, r.gameweek or 0))
 
@@ -155,4 +166,35 @@ def parse_matches(data: bytes, season: str) -> pl.DataFrame:
         raise ContractError(f"{unparsed} kickoff times could not be parsed")
     return pl.concat([meta, stats], how="horizontal").select(
         pl.lit(season).alias("season"), pl.all()
+    )
+
+
+def cup_name(path: str) -> str:
+    """The competition of a cup_matches file, from its path."""
+    if not (m := _CUP.match(path)):
+        raise ContractError(f"not a cup matches file: {path}")
+    return m.group(3)
+
+
+def parse_cup_matches(data: bytes, season: str, competition: str) -> pl.DataFrame:
+    """One row per cup match: kickoff and the FPL team codes of the Premier League sides
+    (null for a foreign or lower-league club).
+
+    Upstream leaves some rows without a kickoff time (2025-26 European knockout rounds)
+    and lists undecided ties as placeholders ("arsenal-vs-newcastle-united/manchester-
+    city"). Neither can be placed in time, so both are dropped: congestion from those
+    matches is undercounted.
+    """
+    raw = read_strings(data)
+    out = raw.select(
+        pl.lit(season).alias("season"),
+        pl.lit(competition).alias("competition"),
+        value(raw, "match_id", required=True).alias("match_id"),
+        _utc(value(raw, "kickoff_time", required=True)).alias("kickoff_time"),
+        (value(raw, "finished", required=True) == "True").alias("finished"),
+        optional(raw, "home_team").cast(pl.Int64).alias("home_team_code"),
+        optional(raw, "away_team").cast(pl.Int64).alias("away_team_code"),
+    )
+    return out.filter(
+        pl.col("kickoff_time").is_not_null() & ~pl.col("match_id").str.contains("/", literal=True)
     )
