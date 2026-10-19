@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from fpl_models import penalties, player_features, player_model, team_strength
+from fpl_models import availability, penalties, player_features, player_model, team_strength
 from fpl_models.backtest import run_backtest
 from fpl_models.data import DEFAULT_WAREHOUSE, load_player_matches, player_gameweeks
 from fpl_models.leaderboard import EVALUATION_SEASONS
@@ -120,6 +120,21 @@ EXPERIMENTS |= {
     "r6_iter800": replace(player_model.PRODUCTION, max_iter=800),
 }
 
+# Round 8 (E12): point-in-time status/news and set-piece order (vaastav's archive),
+# against production and against production x the live availability multiplier.
+_PROD = player_model.PRODUCTION.features
+EXPERIMENTS |= {
+    "r8_base": player_model.PRODUCTION,  # same runner, so the comparison is like for like
+    "r8_avail": replace(
+        player_model.PRODUCTION, features=_PROD + availability.AVAILABILITY_FEATURES
+    ),
+    "r8_pens": replace(player_model.PRODUCTION, features=_PROD + availability.SET_PIECE_FEATURES),
+    "r8_both": replace(
+        player_model.PRODUCTION,
+        features=_PROD + availability.AVAILABILITY_FEATURES + availability.SET_PIECE_FEATURES,
+    ),
+}
+
 
 # Round 9 (E15): predictions are compressed at the top (elite attackers' goals ~10%
 # low). Production stops early (~150 of 400 rounds at learning rate 0.03).
@@ -144,14 +159,21 @@ EXPERIMENTS |= {
 
 
 def load_features(warehouse: Path) -> pl.DataFrame:
-    """Every candidate feature: fixture rows, team context, schedule and penalties."""
+    """Every candidate feature: fixture rows, team context, schedule, penalties and,
+    once `fpl_models.availability` has built the snapshots, point-in-time availability."""
     matches = team_strength.load_matches(warehouse)
     features = player_features.build_features(
         player_features.load_fixture_rows(warehouse),
         player_features.match_lambdas(matches),
         player_features.schedule_features(matches),
     )
-    return penalties.add_penalties(features, penalties.season_table(*penalties.load(warehouse)))
+    features = penalties.add_penalties(features, penalties.season_table(*penalties.load(warehouse)))
+    snapshots = Path(os.getenv("FPL_LAKE_URL", "data")) / availability.SNAPSHOT
+    if not snapshots.exists():
+        return features
+    deadlines = features.select("season", "gameweek", "deadline_utc").unique()
+    table = availability.features(availability.align(pl.read_parquet(snapshots), deadlines))
+    return availability.add_availability(features, table)
 
 
 def per_gameweek(predictions: pl.DataFrame, gameweeks: pl.DataFrame) -> pl.DataFrame:

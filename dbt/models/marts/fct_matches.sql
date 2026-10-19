@@ -16,7 +16,10 @@ select
     -- 2015-16 only) and can be a day out for evening games.
     coalesce(fpl_kickoff_utc, elo_kickoff_utc) as kickoff_utc,
     coalesce(cast(fpl_kickoff_utc as date), fd_match_date, us_match_date) as match_date,
-    coalesce(fpl_finished, us_is_result, fd_home_goals is not null) as is_played,
+    -- A match counts as played once FPL has its final score, before bonus is confirmed:
+    -- otherwise yesterday's games would still be served as upcoming, with odds.
+    coalesce(fpl_finished_provisional, us_is_result, fd_home_goals is not null) as is_played,
+    coalesce(fpl_finished_provisional and not fpl_finished, false) as is_provisional,
 
     -- FPL-Elo-Insights goals are excluded: they contain known wrong scores.
     coalesce(fpl_home_goals, fd_home_goals, us_home_goals) as home_goals,

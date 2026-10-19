@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from fpl_models import experiments, optimizer, player_model, prices, team_strength
+from fpl_models import e12, experiments, optimizer, player_model, prices, team_strength
 from fpl_models.data import DEFAULT_WAREHOUSE, load_player_matches, player_gameweeks
 from fpl_models.season_sim import SeasonSimulator, Week, play
 
@@ -70,6 +70,9 @@ class Job:
     wildcards: tuple[int, ...] = ()
     wildcard_threshold: float | None = None
     value_weight: float = 0.0  # E10: points per 0.1m of expected selling-value change
+    start_noise: float = 0.3  # first-squad noise (0: the model's own squad)
+    availability: bool = False  # E12: the live tool's status multiplier, point in time
+    extra_bank: int = 0  # E13: tenths added to the bank after the first squad
 
 
 def path_file(label: str, season: str, seed: int) -> Path:
@@ -86,9 +89,13 @@ def _play(job: Job) -> str:
     moves = None
     if job.value_weight:
         moves = prices.by_gameweek(pl.read_parquet(PRICE_MOVES), season)
+    factors = None
+    if job.availability:
+        factors = e12.by_gameweek(pl.read_parquet(e12.SIM_FACTORS), season)
     result, records = play(
-        season, weeks, settings, seed=seed, wildcards=job.wildcards,
-        wildcard_threshold=job.wildcard_threshold, price_moves=moves,
+        season, weeks, settings, seed=seed, start_noise=job.start_noise,
+        wildcards=job.wildcards, wildcard_threshold=job.wildcard_threshold, price_moves=moves,
+        availability=factors, extra_bank=job.extra_bank,
     )  # fmt: skip
     path = path_file(label, season, seed)
     path.write_text(json.dumps([asdict(r) for r in records]))
@@ -173,6 +180,9 @@ def main() -> None:
     parser.add_argument("--wildcard-threshold", type=float)
     parser.add_argument("--skip-existing", action="store_true")
     parser.add_argument("--value-weight", type=float, default=0.0, help="E10, points per 0.1m")
+    parser.add_argument("--start-noise", type=float, default=0.3, help="0: no noise")
+    parser.add_argument("--availability", action="store_true", help="E12 status multiplier")
+    parser.add_argument("--extra-bank", type=int, default=0, help="E13, tenths after GW1")
     parser.add_argument("--labels", nargs="+", default=[])
     parser.add_argument("--against", default="v2")
     parser.add_argument("--seasons", nargs="+", default=list(experiments.TUNING_SEASONS))
@@ -196,6 +206,9 @@ def main() -> None:
                 tuple(args.wildcards),
                 args.wildcard_threshold,
                 args.value_weight,
+                args.start_noise,
+                args.availability,
+                args.extra_bank,
             )
             for seed in range(*args.seeds)
             for c in args.configs
