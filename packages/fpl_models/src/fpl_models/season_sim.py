@@ -287,6 +287,7 @@ def play(  # noqa: PLR0913 - chip options are keyword-only
     wildcard_threshold: float | None = None,
     price_moves: Mapping[int, Mapping[int, float]] | None = None,
     availability: Mapping[int, pl.DataFrame] | None = None,
+    extra_bank: int = 0,
 ) -> tuple[SeasonResult, list[PathRecord]]:
     """Manage one team through the prepared season.
 
@@ -304,6 +305,9 @@ def play(  # noqa: PLR0913 - chip options are keyword-only
     `availability` (gameweek -> player_code, this_week, later; E12) applies the live
     tool's multiplier from the status at that deadline: `this_week` scales the coming
     gameweek, `later` the rest of the horizon (0 for players who left).
+
+    `extra_bank` (tenths) is added to the bank after the first squad is built: what a
+    given amount of extra budget is worth in points (E13).
     """
     result, records = SeasonResult(season), []
     squad: list[int] | None = None
@@ -350,7 +354,7 @@ def play(  # noqa: PLR0913 - chip options are keyword-only
             wildcard_used.add(half)
         step = plan.gameweeks[0]
         if squad is None:
-            bank = optimizer.BUDGET - sum(price[p] for p in step.squad)
+            bank = optimizer.BUDGET - sum(price[p] for p in step.squad) + extra_bank
             paid = {p: price[p] for p in step.squad}
         else:
             bank += sum(sell[p] for p in step.transfers_out) - sum(

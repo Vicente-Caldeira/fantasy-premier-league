@@ -488,6 +488,40 @@ The honest scoreboard. The planner manages its own team through the live season,
 
 **Start-noise bias check.** Season paths start from a squad built on noisy expected points (`start_noise = 0.3`), so the paths differ. Does that noise cost points? With `start_noise = 0.1` on the tuning seasons (30 paths per season): **+15.9 per season (95% CI −6.3, +38.4)** vs 0.3. A small pessimistic bias of up to ~16 points is possible but not established. The rank estimates above may be slightly low, by well under one rank band.
 
+## E13: in-week price timing (measured on 2023-26; no production change)
+
+**Data.** E10 had prices only per gameweek, and FPL changes prices overnight. The Wayback Machine has archived the live player list (`bootstrap-static`) about twice a day since 2023 (`fpl_models.e13`).
+- One capture a day was kept, after that night's price changes, from July 2023 to May 2026: 994 captures, of which 966 fall inside a transfer window.
+- That gives 515,884 player pairs from consecutive days in the same window.
+- The archive refuses connections above ~15 requests a minute, so downloads are sequential with backoff.
+- A price change on a given player-day is rare: rises 0.2%, falls 0.5%.
+
+**1. Can the next night's change be predicted from the window so far?** Barely, from public data. The features are net transfers since the deadline, as a share of all activity and per point of ownership. The model is a monotone gradient-boosted classifier, chosen over an unconstrained one by Brier score on 2024-25 (fit on 2023-24). 2025-26 is the test.
+
+| | 2024-25 (validation) | 2025-26 (test) |
+|---|---|---|
+| P(rise) skill vs base rate | −0.04 | +0.06 |
+| P(rise) predicted / actual, top bin | 0.32 / 0.11 | 0.23 / 0.15 |
+| P(fall) skill | +0.01 | +0.02 |
+
+The predicted probabilities never reach 0.5. FPL's algorithm works on net transfers since each player's *last price change*, with thresholds and protection flags it doesn't publish, and a cumulative since-deadline count can't track that. Adding the latest day's flow and changes-so-far made the model overconfident out of sample (0.98 predicted vs 0.20 actual). That variant was also chosen after looking at both seasons, so it's reported here and rejected.
+
+**2. What is timing worth?** I took the 3,112 transfers v2's held-out season-simulation paths actually made (20 per season, 2023-26) and compared selling value at the deadline under different execution times. Buying before a rise keeps half of it (FPL's selling rule); selling before a fall saves all of it:
+
+| Execution | £m per season (95% CI) |
+|---|---|
+| at the deadline (simulator, baseline) | 0 |
+| **right after the previous deadline** | **+1.29 (+1.21, +1.37)** |
+| when the predictor says P(rise in) or P(fall out) > 0.5 | 0.00 (never triggers) |
+| best capture in hindsight (upper bound) | +1.41 (+1.34, +1.48) |
+
+- **v2 already buys risers and sells fallers.** The players it moves are the ones the crowd is moving, so executing the same transfers early captures 91% of the hindsight value.
+- **That is about +5 points a season, before costs.** Extra budget measured directly: +£2.0m from GW2 is worth +16.9 points per season (95% CI −3.0, +37.1) on the held-out seasons (`e1 play --extra-bank 20`), about 8 points per £1m. Timing gains build up through the season, averaging about £0.65m, so roughly +5 points.
+- **The cost is news.** About 1.6 transfers per season buy a player who was available at the window start but flagged by the deadline. At a few points each, that cancels most of the gain.
+- **The decisions are the deadline's.** The deadline plan already saw the whole window's crowd signal, so moving early with less information would change some decisions. This measures the value of execution timing, not of planning earlier.
+
+**Decision.** No automatic early transfers. For the live tool, show a price-watch next to each planned transfer: crowd pressure this window, the E10 gameweek-level P(rise)/P(fall), and whether the player is fit. When the buy is rising and the player is fit, suggest making the transfer early, and leave the news risk to the manager.
+
 ## Tried and rejected
 
 | Change | Tuning-season result | Decision |
