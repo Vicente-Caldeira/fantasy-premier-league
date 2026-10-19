@@ -426,6 +426,40 @@ With 40 paths per season, **weight 0.5 gives +18.4 points per season (95% CI −
 - **Not adopted (yet):** the gain is suggestive, not significant, and it's the best of three weights (optimistic). Production keeps `value_weight = 0`.
 - **The mechanism is real but small at gameweek granularity:** squads end up £0.1–0.9m more valuable by GW19. Real team-value gains (£2–5m a season) come from transferring *within* the week, ahead of an overnight rise or fall, and gameweek-level history can't simulate that. The daily snapshots (from 2026-10-17) will make an in-week version testable, and the price model is ready for it.
 
+## E12: availability, news and set-piece order, point in time
+
+FPL exposes status, news, chance of playing and set-piece order only as current state. **vaastav's repository recommits `players_raw.csv` (a bootstrap-static dump) about once a gameweek, so its history is an archive** (`fpl_models.availability`):
+- a blob-less clone gives 263 snapshots for 2019-20 to 2025-26;
+- each gameweek takes the latest snapshot *committed* before its deadline, which can't leak;
+- set-piece orders exist from 2020-21.
+
+**Coverage, the main limitation:**
+
+| Season | Snapshot ≤ 48 h before the deadline | Median age |
+|---|---|---|
+| 2019-20 / 2020-21 | 37% / 42% | 78 h / 53 h |
+| **2021-22 / 2022-23** (tuning) | **50% / 54%** | **47 h / 43 h** |
+| 2023-24 / 2024-25 | 58% / 53% | 44 h / 39 h |
+| 2025-26 | 16% | 660 h (few commits) |
+
+vaastav scrapes after a gameweek, not before the next, so the archive misses most late team news (press conferences, final training). The live tool reads the status minutes before planning.
+
+**Results**, on 2021-23 per gameweek with a paired bootstrap. "Multiplier" is what the live tool already does: × chance of playing, and 0 for players who left. It was never backtested before.
+
+| Variant | Against | Δ regulars MAE | Δ captain pts/GW | Δ top-11 pts/GW |
+|---|---|---|---|---|
+| **production × multiplier** | production | **−0.056 (−0.063, −0.049)** | +0.29 (0.00, +0.87) | +0.05 (−0.20, +0.35) |
+| availability as features | production × multiplier | +0.033 (+0.030, +0.036) | −0.06 (−1.23, +1.05) | +0.68 (−0.63, +2.07) |
+| availability features × multiplier | production × multiplier | +0.017 (+0.014, +0.021) | +0.08 (−0.95, +1.12) | +0.84 (−0.47, +2.20) |
+| penalty order × multiplier | production × multiplier | −0.001 (−0.003, +0.001) | −0.67 (−2.08, +0.71) | +1.42 (−0.31, +3.40) |
+| both × multiplier | production × multiplier | +0.017 (+0.013, +0.020) | −0.72 (−1.87, +0.32) | +1.44 (−0.52, +3.45) |
+
+- **The live multiplier is validated, and it's large.** It's the biggest MAE gain measured here, bigger than v2's whole held-out gain over v1, and the captain picks improve. The live tool is right to apply it.
+- **Learning from the archive doesn't beat it, so the features are rejected.** With snapshots ~45 h stale, the model learns a blurred version of what the fresh flag gives directly. A model only pays off with deadline-time status, which the daily snapshots (from 2026-10-17) now collect.
+- **Within-season penalty order: not significant, not adopted.** Its +1.4 top-11 points per gameweek is the same pattern as E3a, which then failed season simulation. Neither variant passed the per-gameweek gate, so neither got a season-simulation test.
+
+**In season points, the multiplier is worth +15.6 per season (95% CI −9.4, +40.6)** (`e1 --availability`, production on fixed data, 30 paths per tuning season vs 40). It's positive but not significant. With archive snapshots ~45 h stale, this is a lower bound on what the fresh live flag is worth. It also means the earlier rank estimates (which simulate without it) are slightly pessimistic for the live tool.
+
 ## Shadow team (live season, 2026-27)
 
 The honest scoreboard. The planner manages its own team through the live season, with the same predictions and optimiser a user gets (`fpl_models.shadow`, Dagster asset `gold/shadow/state`).
