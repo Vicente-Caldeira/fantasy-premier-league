@@ -21,9 +21,10 @@ from collections import Counter
 from dataclasses import dataclass, field, replace
 from datetime import datetime
 
+import numpy as np
 import polars as pl
 
-from fpl_models import optimizer, player_model, team_strength
+from fpl_models import optimizer, player_model, simulator, team_strength
 from fpl_models.player_features import CROWD_ALL
 from fpl_models.team_import import selling_price
 
@@ -77,6 +78,33 @@ def score(
     return sum(actual.get(p, 0) for p in team) + (actual.get(captain, 0) if captain in team else 0)
 
 
+@dataclass(frozen=True)
+class Week:
+    """Everything a path needs at one deadline. It doesn't depend on the path's squad,
+    so it is computed once per config and season and shared by every path."""
+
+    gameweek: int
+    pool: pl.DataFrame  # player_code, position, team_key, price
+    xp: pl.DataFrame  # player_code, gameweek, expected_points (this + later gameweeks)
+    upside: pl.DataFrame  # player_code, sim_p90, p_haul (this gameweek)
+    actual: dict[int, int]
+    minutes: dict[int, int]
+
+
+@dataclass
+class PathRecord:
+    """One gameweek of one path, enough to rescore other captain rules (E2)."""
+
+    gameweek: int
+    squad: list[int]
+    lineup: list[int]
+    bench: list[int]
+    captain: int
+    vice_captain: int
+    hits: int
+    points: int  # after hits
+
+
 @dataclass
 class SeasonSimulator:
     features: pl.DataFrame  # player_features.build_features (all fixture rows)
@@ -90,7 +118,10 @@ class SeasonSimulator:
     )
 
     def run(self, season: str) -> SeasonResult:
-        result = SeasonResult(season)
+        return play(season, self.prepare(season), self.settings)[0]
+
+    def prepare(self, season: str) -> list[Week]:
+        """Pool, expected points, upside and truth per deadline, decided blind."""
         deadlines = (
             self.gameweeks.filter(pl.col("season") == season)
             .select("gameweek", "deadline_utc")
@@ -98,55 +129,27 @@ class SeasonSimulator:
             .sort("deadline_utc")
         )
         order = deadlines["gameweek"].to_list()
-        squad: list[int] | None = None
-        bank, free_transfers = 0, 1
-        paid: dict[int, int] = {}
+        weeks = []
         models = None
         for i, (gw, deadline) in enumerate(deadlines.iter_rows()):
             if models is None or i % self.refit_every == 0:
                 models = self._fit(deadline)
             pool = self._pool(season, deadline)
-            xp = self._expected_points(season, order[i : i + self.horizon], deadline, pool, models)
-            price = dict(zip(pool["player_code"], pool["price"], strict=True))
-            sell = {p: selling_price(paid[p], price[p]) for p in squad or []}
-            plan = optimizer.optimise(
-                pool.select("player_code", "position", "team_key", "price"),
-                xp,
-                current_squad=squad,
-                bank=bank,
-                free_transfers=free_transfers,
-                selling_prices=sell,
-                settings=self.settings,
+            xp, upside = self._expected_points(
+                season, order[i : i + self.horizon], deadline, pool, models
             )
-            step = plan.gameweeks[0]
-            if squad is None:
-                bank = optimizer.BUDGET - sum(price[p] for p in step.squad)
-                paid = {p: price[p] for p in step.squad}
-            else:
-                bank += sum(sell[p] for p in step.transfers_out) - sum(
-                    price[p] for p in step.transfers_in
-                )
-                for p in step.transfers_out:
-                    paid.pop(p)
-                paid |= {p: price[p] for p in step.transfers_in}
-                used = len(step.transfers_in) - step.hits
-                free_transfers = min(optimizer.MAX_FREE_TRANSFERS, free_transfers - used + 1)
-
             truth = self.gameweeks.filter((pl.col("season") == season) & (pl.col("gameweek") == gw))
-            actual = dict(zip(truth["player_code"], truth["points"], strict=True))
-            minutes = dict(zip(truth["player_code"], truth["minutes"], strict=True))
-            position = dict(zip(pool["player_code"], pool["position"], strict=True))
-            this_week = {p: v for p, g, v in xp.iter_rows() if g == gw}
-            bench = sorted(
-                (p for p in step.squad if p not in step.lineup),
-                key=lambda p: (position[p] == "GKP", -this_week.get(p, 0.0)),
+            weeks.append(
+                Week(
+                    gameweek=gw,
+                    pool=pool,
+                    xp=xp,
+                    upside=upside,
+                    actual=dict(zip(truth["player_code"], truth["points"], strict=True)),
+                    minutes=dict(zip(truth["player_code"], truth["minutes"], strict=True)),
+                )
             )
-            result.points.append(
-                score(step, bench, actual, minutes, position) - optimizer.HIT_COST * step.hits
-            )
-            result.hits.append(step.hits)
-            squad = step.squad
-        return result
+        return weeks
 
     def _pool(self, season: str, deadline: datetime) -> pl.DataFrame:
         """Everyone registered this season so far, latest price/club/position as of g."""
@@ -181,7 +184,7 @@ class SeasonSimulator:
         deadline: datetime,
         pool: pl.DataFrame,
         models: tuple[player_model.FittedComponents, player_model.FittedComponents],
-    ) -> pl.DataFrame:
+    ) -> tuple[pl.DataFrame, pl.DataFrame]:
         next_model, planning_model = models
         rows = self.features.filter(
             (pl.col("season") == season) & pl.col("gameweek").is_in(upcoming)
@@ -232,12 +235,20 @@ class SeasonSimulator:
             )
             parts.append((later, planning_model))
 
-        frames = [
-            frame.select("player_code", "gameweek").with_columns(
-                player_model.expected_points(frame, model.components(frame))
+        frames = []
+        for frame, model in parts:
+            events = model.components(frame)
+            frames.append(
+                frame.select("player_code", "gameweek").with_columns(
+                    player_model.expected_points(frame, events)
+                )
             )
-            for frame, model in parts
-        ]
+            if frame is nxt:
+                settings = simulator.SimulationSettings(
+                    draws=2000, defcon_on=season >= player_model.DEFCON_FROM_SEASON
+                )
+                dist = simulator.per_player_gameweek(simulator.simulate(nxt, events, settings), nxt)
+                upside = dist.select("player_code", "sim_p90", "p_haul")
         xp = (
             pl.concat(frames)
             .group_by("player_code", "gameweek")
@@ -245,9 +256,92 @@ class SeasonSimulator:
         )
         # Every pool player gets a row per gameweek (0 when blank), so the squad stays valid.
         grid = pool.select("player_code").join(pl.DataFrame({"gameweek": upcoming}), how="cross")
-        return grid.join(xp, on=["player_code", "gameweek"], how="left").with_columns(
+        xp = grid.join(xp, on=["player_code", "gameweek"], how="left").with_columns(
             pl.col("expected_points").fill_null(0.0)
         )
+        return xp, upside
+
+
+def play(
+    season: str,
+    weeks: list[Week],
+    settings: optimizer.Settings,
+    *,
+    seed: int | None = None,
+    start_noise: float = 0.3,
+) -> tuple[SeasonResult, list[PathRecord]]:
+    """Manage one team through the prepared season.
+
+    With `seed`, the first squad is built from noisy expected points (each player's
+    multiplied by exp(N(0, start_noise))), so different seeds give different but
+    reasonable starting squads: independent paths through the same season.
+    """
+    result, records = SeasonResult(season), []
+    squad: list[int] | None = None
+    bank, free_transfers = 0, 1
+    paid: dict[int, int] = {}
+    for week in weeks:
+        pool, xp = week.pool, week.xp
+        if squad is None and seed is not None:
+            rng = np.random.default_rng(seed)
+            noise = pl.DataFrame({
+                "player_code": pool["player_code"],
+                "_noise": np.exp(rng.normal(0, start_noise, pool.height)),
+            })  # fmt: skip
+            xp = (
+                xp.join(noise, on="player_code")
+                .with_columns(pl.col("expected_points") * pl.col("_noise"))
+                .drop("_noise")
+            )
+        price = dict(zip(pool["player_code"], pool["price"], strict=True))
+        sell = {p: selling_price(paid[p], price[p]) for p in squad or []}
+        plan = optimizer.optimise(
+            pool.select("player_code", "position", "team_key", "price"),
+            xp,
+            current_squad=squad,
+            bank=bank,
+            free_transfers=free_transfers,
+            selling_prices=sell,
+            settings=settings,
+        )
+        step = plan.gameweeks[0]
+        if squad is None:
+            bank = optimizer.BUDGET - sum(price[p] for p in step.squad)
+            paid = {p: price[p] for p in step.squad}
+        else:
+            bank += sum(sell[p] for p in step.transfers_out) - sum(
+                price[p] for p in step.transfers_in
+            )
+            for p in step.transfers_out:
+                paid.pop(p)
+            paid |= {p: price[p] for p in step.transfers_in}
+            used = len(step.transfers_in) - step.hits
+            free_transfers = min(optimizer.MAX_FREE_TRANSFERS, free_transfers - used + 1)
+
+        position = dict(zip(pool["player_code"], pool["position"], strict=True))
+        this_week = {p: v for p, g, v in week.xp.iter_rows() if g == week.gameweek}
+        bench = sorted(
+            (p for p in step.squad if p not in step.lineup),
+            key=lambda p: (position[p] == "GKP", -this_week.get(p, 0.0)),
+        )
+        points = score(step, bench, week.actual, week.minutes, position)
+        points -= optimizer.HIT_COST * step.hits
+        result.points.append(points)
+        result.hits.append(step.hits)
+        records.append(
+            PathRecord(
+                week.gameweek,
+                step.squad,
+                step.lineup,
+                bench,
+                step.captain,
+                step.vice_captain,
+                step.hits,
+                points,
+            )
+        )
+        squad = step.squad
+    return result, records
 
 
 def main() -> None:

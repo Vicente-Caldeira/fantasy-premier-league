@@ -176,6 +176,49 @@ In the 6 gameweeks where a defender was the model's top pick, he scored 8.8 on a
 8. **Model registry and serving:** persist the fitted v2 components to the MLflow registry, so the API serves predictions without retraining (about 50 s per run today).
 9. **Top-end bias correction** for DEF, GKP and FWD (−5%), by isotonic regression on the tuning seasons. The earlier price-band calibration failed, but a position × predicted-value one wasn't tried.
 
+## E1: how noisy is season simulation? (20 paths per config × season)
+
+Each path starts from a different reasonable squad (seeded noise on the first deadline's expected points) and then plays normally. Predictions are computed once per config × season and shared by all paths.
+
+| Config | Season | Mean | SD | Min–max | Hits |
+|---|---|---|---|---|---|
+| v1 | 2021-22 | 1966 | 56 | 1871–2079 | 50 |
+| v2 | 2021-22 | 2097 | 80 | 1971–2241 | 49 |
+| v1 | 2022-23 | 2132 | 69 | 2029–2275 | 34 |
+| v2 | 2022-23 | 2119 | 58 | 2013–2260 | 19 |
+
+- **v2 − v1 = +59 per season-path (95% CI +27, +92).** That's +131 in 2021-22 and −13 in 2022-23. **The earlier single-path +292 was inflated by luck:** the honest figure is about +120 over two seasons.
+- **One path per season has an SD of 55–80 points.** Detecting 50 points with 80% power needs **~27 paths per setting**.
+- **Pairing paths by seed doesn't help** (SD of differences 107): the same noise yields different starting squads under each model.
+
+## E2: risk-aware captaincy (rejected for total points)
+
+E1's v2 paths were rescored with only the captain and vice re-chosen (1,500 path-gameweeks). As a sanity check, the current rule reproduces 98.5% of recorded scores; the rest are solver near-ties.
+
+| Captain rule | Season gain vs expected points (95% CI) |
+|---|---|
+| xP + 2·P(haul) | −10 (−30, +0) |
+| xP + 5·P(haul) | −11 (−31, −0) |
+| xP + 10·P(haul) | −6 (−29, +8) |
+| xP + 20·P(haul) | −6 (−30, +9) |
+| highest p90 | −6 (−31, +12) |
+
+For **total points**, the highest-expected-points captain is optimal (as theory says), and upside rules only add noise. Upside matters for **rank**, which depends on ownership. That needs effective ownership in the simulation, and becomes a separate experiment (E2b).
+
+## E5: position calibration (rejected)
+
+Walk-forward isotonic maps (predicted → actual), refitted every 4 gameweeks on earlier predictions only, with 2020-21 as warm-up. Compared with raw v2 on 2021-23:
+
+| Variant | Δ regulars MAE (95% CI) | Δ captain | Δ top-11 |
+|---|---|---|---|
+| per position | +0.028 (+0.024, +0.032) | +0.0 (−1.1, +1.2) | −0.8 (−2.3, +0.5) |
+| one map | +0.027 (+0.024, +0.031) | +0.7 (−0.0, +1.7) | −0.9 (−2.4, +0.4) |
+| half strength, per position | +0.013 (+0.011, +0.015) | −0.3 | −1.2 (−2.1, −0.3) |
+
+- **MAE punishes mean calibration:** points are right-skewed (mean > median), so moving predictions toward the conditional mean raises absolute error. The decision metrics are the relevant test, and they show no gain.
+- **The isotonic maps overfit the sparse top end:** high-predicted goalkeepers went 6.28 → 7.89 against 5.86 actual.
+- **The bias was smaller than first measured:** with true walk-forward predictions, high-predicted defenders run 5.73 vs 5.58 actual (−3%, not −5%).
+
 ## Tried and rejected
 
 | Change | Tuning-season result | Decision |
