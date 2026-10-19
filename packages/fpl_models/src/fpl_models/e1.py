@@ -35,6 +35,7 @@ CONFIGS = {
     "v2fix": player_model.PRODUCTION,
     "v2pen": experiments.EXPERIMENTS["r5_penalties"],
     "v3blend": experiments.EXPERIMENTS["r12_blend"],  # E17: half structural attack rates
+    "v3blend25": experiments.EXPERIMENTS["r12_blend25"],
 }
 SETTINGS = optimizer.Settings(time_limit_seconds=30)
 DETECT = 50  # points of season-total difference we want to be able to detect

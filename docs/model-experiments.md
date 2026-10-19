@@ -443,7 +443,8 @@ All results below are paired walk-forward backtests on the tuning seasons vs `r4
 | E15 | `r9_lr10` | +0.001 | −0.49 | −0.80 | Rejected |
 | E16 rates given an appearance | `r10_conditional` | not backtested | | | Dropped: live predictions barely move (Haaland 4.86 → 5.12) |
 | E17 structural attack rates | `r12_structural` | −0.004 (−0.007, −0.000) | +0.63 (−0.77, +2.08) | +2.12 (−0.29, +4.52) | Over-shoots premiums (5.36 vs 5.09) |
-| **E17 blend, w = 0.5** | `r12_blend` | **−0.004 (−0.006, −0.002)** | +0.25 (−1.01, +1.55) | **+2.41 (+0.68, +4.12)** | Season-simulation test below |
+| E17 blend, w = 0.5 | `r12_blend` | −0.004 (−0.006, −0.002) | +0.25 (−1.01, +1.55) | +2.41 (+0.68, +4.12) | Rejected in season simulation (below) |
+| E17 blend, w = 0.25 | `r12_blend25` | −0.002 (−0.003, −0.002) | | +1.94 (+0.61, +3.37) | Rejected in season simulation: −26.9 (−50.5, −3.1) |
 | E18 targets 0.7 xG + 0.3 goals | `r13_xg_07` | −0.000 | −0.09 | +0.26 (−0.40, +0.99) | Rejected |
 | E18 targets 0.5 xG + 0.5 goals | `r13_xg_05` | −0.001 | +0.15 | −0.29 (−0.80, +0.16) | Rejected |
 
@@ -454,6 +455,12 @@ All results below are paired walk-forward backtests on the tuning seasons vs `r4
   - multiplied by this fixture's team λ over the team's recent average, then by expected minutes;
   - calibrated per position to the training totals.
 - **Blending half structural, half tree** fixes premium calibration: £10m+ players are now 4.92 vs 5.09 actual (2021-22) and 5.19 vs 5.24 (2022-23). Overall and positional calibration are unchanged.
+- **Season simulation rejects the blend:** −12.1 points per season (95% CI −34.0, +10.3), with 40 paths per season (2021-22: −29.9; 2022-23: +5.8). Hits were similar (34.0 vs 36.6 per season).
+  - The backtest's top-11 has no budget limit, so ranking premiums higher there is pure gain.
+  - With a £100m squad, valuing premiums more moves money away from depth, and the extra premium points don't cover that.
+  - Captain points, the only budget-free decision, gain just +0.25, which is not significant.
+- **A gentler blend (w = 0.25) is significantly worse in season simulation** (−26.9 per season), despite a significant top-11 gain. I stopped there rather than search more weights on the same two seasons.
+- **Lesson: budget-free top-11 points don't predict season points** for changes that re-rank players by price. Use season simulation for any change that moves premium players, and treat backtest top-11 as a screen only.
 - **E18 doesn't help:** putting actual goals back in the target barely moves premiums (4.48 → 4.48). The tree still averages them away, so the bias is structural, not about the label.
 
 ## Tried and rejected

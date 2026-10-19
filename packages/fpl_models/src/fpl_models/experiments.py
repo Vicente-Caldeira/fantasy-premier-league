@@ -135,6 +135,7 @@ EXPERIMENTS |= {
     # E17: structural goals/assists (shrunk per-90 rate x fixture x expected minutes).
     "r12_structural": replace(player_model.PRODUCTION, structural_weight=1.0),
     "r12_blend": replace(player_model.PRODUCTION, structural_weight=0.5),
+    "r12_blend25": replace(player_model.PRODUCTION, structural_weight=0.25),
     # E18: premium attackers out-score their xG (+14%) and pure-xG targets remove
     # finishing skill; blend actual goals back in (re-test on the fixed xG data).
     "r13_xg_07": replace(player_model.PRODUCTION, denoise_weight=0.7),
