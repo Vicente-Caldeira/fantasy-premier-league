@@ -651,7 +651,7 @@ NVIDIA reports first place on TabArena. That claim is not verified here, and NVI
 | blend, w = 0.25 | +0.001 (−0.001, +0.003) | +0.13 (−0.92, +1.24) | **+1.73 (+0.25, +3.35)** |
 | **blend, w = 0.5** (`v4kumo50`) | +0.005 (+0.001, +0.010) | +0.52 (−0.72, +1.79) | **+2.76 (+0.75, +4.68)** |
 
-- **Kumo is better calibrated at the top.** Mean prediction is 1.318 vs 1.310 actual (production: 1.284). £10m+ players are 4.68 (production 4.62; actual 5.15).
+- **Kumo's level is calibrated:** 1.318 predicted vs 1.310 actual (production: 1.284). On £10m+ players it's level with production: 4.60–4.68 across two runs vs 4.62 (actual 5.15, over only 571 player-gameweeks).
 - **It mostly agrees with production** (correlation 0.971), so the blend gains from diversity, not a better model. Kumo alone has a worse MAE.
 
 **Tuning-season simulation** (40 paths per season, vs production on the same code):
@@ -673,7 +673,7 @@ This was the first model change to pass the season simulation since the xG fix. 
 | blend, w = 0.5 | −0.002 (−0.006, +0.001) | +0.39 (−0.10, +0.88) | −0.31 (−1.72, +1.06) |
 
 - **The tuning top-11 gain does not replicate** (+2.76 → −0.31).
-- Correlation with production (0.975) and better premium calibration do carry over: £10m+ players are 4.23 vs production's 4.06 (actual 4.43).
+- Correlation with production (0.975) carries over. On the held-out seasons, Kumo rates £10m+ players higher than production: 4.23 vs 4.06 (actual 4.43).
 
 **Held-out season simulation** (the acceptance test; 40 paths per season, vs production rerun on the same code):
 
@@ -688,8 +688,22 @@ This was the first model change to pass the season simulation since the xG fix. 
 - **Season points rose with no top-11 gain.** This is the reverse of E17, where the backtest's top-11 rose and season points fell. Two things carry the gain:
   - **Fewer hits in all five seasons,** 2 to 6 fewer each season. The blend also revises its top 100 players' expected points less from one deadline to the next, in all five seasons (e.g. 2025-26: 0.57 → 0.51 points). That fits a smoother ranking with fewer marginal transfers, but the effect is small, so treat it as a likely explanation, not a proven one.
   - **Captain:** +0.39 a gameweek (−0.10, +0.88), about +15 points a season.
+- **Reproduction.** The in-repo rerun (`python -m fpl_models.e19`, seed 0) matches the scratch runs on the tuning seasons:
+  - Kumo's predictions correlate 0.993 with the scratch run's;
+  - for the 50/50 blend: MAE +0.006 (+0.002, +0.010), captain +0.30 (−0.89, +1.52), top-11 +2.44 (+0.53, +4.39).
 - **Determinism check.** The production rerun shares 60 paths with the earlier held-out paths. 55 are identical, and the other 5 differ by up to 52 points, most likely because the optimiser's 30 s time limit binds differently under 16 parallel workers. The means agree: −3.5 (−23.0, +15.7).
 - **Lesson:** the per-gameweek backtest is a screen in both directions. A budget-free top-11 metric missed both E17's loss and E19's gain, so the season simulation stays the acceptance test.
+
+**Follow-up: Kumo as the minutes model (rejected; tuning seasons only).** A Kumo small classifier predicts the minutes class (0 / 1–59 / 60+) from the same 50k-row context. Its probabilities replace, or are averaged with, production's minutes component:
+
+| | Minutes log loss | Brier | Δ regulars MAE | Δ captain pts | Δ top-11 pts |
+|---|---|---|---|---|---|
+| production minutes | 0.5006 | 0.2780 | | | |
+| Kumo minutes | **0.4945** | **0.2754** | −0.0049 (−0.0110, +0.0004) | −0.23 (−0.72, +0.21) | +0.73 (−0.67, +2.53) |
+| average of the two | | | **−0.0046 (−0.0076, −0.0019)** | 0.00 | **+0.78 (+0.03, +1.69)** |
+| average, then 50/50 with Kumo points, **vs the adopted blend** | | | −0.0007 (−0.0022, +0.0007) | 0.00 | +0.04 (−0.45, +0.55) |
+
+Kumo predicts minutes better than production's tree, but the gain disappears once Kumo's own points are blended in, because they already carry that information. Production is unchanged and no season simulation was needed.
 
 
 ## Tried and rejected

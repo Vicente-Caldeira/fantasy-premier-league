@@ -67,7 +67,7 @@ scikit-learn **HistGradientBoosting**: gradient-boosted decision trees (the same
 
 Live expected points are half the component model's and half **NVIDIA Kumo Tabular**'s: a pretrained tabular foundation model (the small, 28M-parameter regressor) that is never trained on our data.
 - **In-context learning:** at each run it reads a *context* of the newest 50,000 labelled fixture rows (about two seasons) with the same 34 features, and predicts each upcoming fixture's total points in one forward pass. The mean of its 999 predicted quantiles is the expected value.
-- **Label:** actual points, not the xG-denoised targets, so finishing skill stays in. That's why it rates premium players higher.
+- **Label:** actual points, not the xG-denoised targets, so finishing skill stays in. It rates £10m+ players higher than production on the held-out seasons (4.23 vs 4.06; actual 4.43) and live, but not on the tuning seasons.
 - **Same rules as production:** later gameweeks use a context without the crowd features, and FPL's availability flags scale Kumo's points too. The upside distributions (p90, P(haul)) stay the simulator's.
 - **Why a blend:** Kumo alone has a worse MAE and correlates 0.97 with production. The blend gains from diversity: +31 points a season in the held-out season simulation (95% CI +14, +48).
 
