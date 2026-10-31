@@ -16,6 +16,12 @@ fpl-core = { workspace = true }
 fpl-models = { workspace = true }
 fpl-api = { workspace = true }
 fpl-pipelines = { workspace = true }
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
 
 [dependency-groups]
 dev = [
@@ -61,6 +67,12 @@ plugins = ["pydantic.mypy"]
 [[tool.mypy.overrides]]
 module = ["dagster.*", "fsspec.*", "sklearn.*", "ortools.*"]
 ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# Optional (the `kumo` extra): CI type-checks without it installed.
+module = ["sdm.*", "torch.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-markers --import-mode=importlib"

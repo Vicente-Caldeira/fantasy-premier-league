@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from fpl_models import e12, experiments, optimizer, player_model, prices, team_strength
+from fpl_models import e12, experiments, kumo, optimizer, player_model, prices, team_strength
 from fpl_models.data import DEFAULT_WAREHOUSE, load_player_matches, player_gameweeks
 from fpl_models.season_sim import SeasonSimulator, Week, play
 
@@ -36,7 +36,9 @@ CONFIGS = {
     "v2pen": experiments.EXPERIMENTS["r5_penalties"],
     "v3blend": experiments.EXPERIMENTS["r12_blend"],  # E17: half structural attack rates
     "v3blend25": experiments.EXPERIMENTS["r12_blend25"],
+    "v4kumo50": player_model.PRODUCTION,  # E19: half Kumo Tabular (see KUMO)
 }
+KUMO = {"v4kumo50": kumo.KumoConfig(weight=0.5)}
 SETTINGS = optimizer.Settings(time_limit_seconds=30)
 DETECT = 50  # points of season-total difference we want to be able to detect
 
@@ -52,8 +54,9 @@ def _prepare(job: tuple[str, str, int]) -> str:
     features = experiments.load_features(DEFAULT_WAREHOUSE)
     truth = player_gameweeks(load_player_matches(DEFAULT_WAREHOUSE))
     sim = SeasonSimulator(
-        features, truth, matches, CONFIGS[config], horizon=horizon, settings=SETTINGS
-    )
+        features, truth, matches, CONFIGS[config], horizon=horizon, settings=SETTINGS,
+        kumo=KUMO.get(config),
+    )  # fmt: skip
     weeks = sim.prepare(season)
     weeks_path(config, season, horizon).write_bytes(pickle.dumps(weeks))
     return f"prepared {config} horizon {horizon} {season}: {len(weeks)} gameweeks"
