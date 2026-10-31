@@ -14,6 +14,7 @@ player's fixtures in the gameweek.
 """
 
 from dataclasses import dataclass, field, replace
+from typing import TYPE_CHECKING
 
 import numpy as np
 import polars as pl
@@ -31,6 +32,9 @@ from fpl_models.player_features import (
     feature_matrix,
     latest_player_state,
 )
+
+if TYPE_CHECKING:
+    from fpl_models.kumo import KumoConfig
 
 DEFCON_FROM_SEASON = "2025-26"
 MAX_COUNT = 20
@@ -489,6 +493,34 @@ def with_live_crowd(rows: pl.DataFrame, squads: pl.DataFrame, next_gameweek: int
     return joined.with_columns(pl.when(is_next).then(pl.col(c)).alias(c) for c in columns)
 
 
+def _blend_kumo(  # noqa: PLR0913 - one blend step, all of it needed
+    features: pl.DataFrame,
+    rows: pl.DataFrame,
+    *,
+    next_gameweek: int,
+    points: pl.Series,
+    factor: pl.Series,
+    config: "KumoConfig",
+) -> pl.Series:
+    """E19: blend Kumo Tabular's per-fixture expected points into production's.
+
+    Kumo's context is every labelled fixture row (newest `context_rows`). The next
+    gameweek uses all features, later ones the no-crowd planning features, and Kumo's
+    points get the same availability factor as production's events. Simulated upside
+    (p90, haul probability) stays production's.
+    """
+    from fpl_models.kumo import blend, fit_pair  # noqa: PLC0415 - optional; imports this module
+
+    next_kumo, planning_kumo = fit_pair(features, None, config)
+    is_next = rows["gameweek"] == next_gameweek
+    predicted = np.zeros(rows.height)
+    for mask, regressor in ((is_next, next_kumo), (~is_next, planning_kumo)):
+        index = mask.to_numpy()
+        if index.any():
+            predicted[index] = regressor.predict(rows.filter(mask))
+    return blend(points, pl.Series(predicted) * factor, config.weight).alias(points.name)
+
+
 def predict_upcoming(  # noqa: PLR0913 - extras are keyword-only
     features: pl.DataFrame,
     squads: pl.DataFrame,
@@ -497,13 +529,15 @@ def predict_upcoming(  # noqa: PLR0913 - extras are keyword-only
     *,
     config: ModelConfig | None = None,
     schedule: pl.DataFrame | None = None,
+    kumo: "KumoConfig | None" = None,
 ) -> pl.DataFrame:
     """Expected points per player for each of `gameweeks` (deadlines still to come).
 
     `features` are all played fixture rows (from `build_features`): the training data,
     and the history each player's latest state is computed from. Trains on the latest
     `config.train_seasons` seasons (DefCon on all labelled history). `schedule`
-    (`player_features.schedule_features`) is required when the config uses it.
+    (`player_features.schedule_features`) is required when the config uses it. `kumo`
+    blends Kumo Tabular's expected points in (E19; needs the `kumo` extra).
     """
     if not gameweeks:
         raise ValueError("no upcoming gameweeks to predict")
@@ -549,6 +583,10 @@ def predict_upcoming(  # noqa: PLR0913 - extras are keyword-only
         # After availability: an absent player's share of team goals moves to teammates.
         events = reconcile(rows, events, fitted.team_rates)
     points = expected_points(rows, events)
+    if kumo is not None:
+        points = _blend_kumo(
+            features, rows, next_gameweek=gameweeks[0], points=points, factor=factor, config=kumo
+        )
     per_fixture = pl.concat([rows, events, factor.to_frame()], how="horizontal").with_columns(
         points
     )

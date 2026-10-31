@@ -27,6 +27,7 @@ import numpy as np
 import polars as pl
 
 from fpl_models import optimizer, player_model, simulator, team_strength
+from fpl_models.kumo import KumoConfig, Regressor, blend, fit_pair
 from fpl_models.player_features import CROWD_ALL
 from fpl_models.team_import import selling_price
 
@@ -123,6 +124,7 @@ class SeasonSimulator:
     settings: optimizer.Settings = field(
         default_factory=lambda: optimizer.Settings(time_limit_seconds=30)
     )
+    kumo: KumoConfig | None = None  # E19: blend Kumo Tabular into expected points
 
     def run(self, season: str) -> SeasonResult:
         return play(season, self.prepare(season), self.settings)[0]
@@ -138,12 +140,15 @@ class SeasonSimulator:
         order = deadlines["gameweek"].to_list()
         weeks = []
         models = None
+        regressors: tuple[Regressor, Regressor] | None = None
         for i, (gw, deadline) in enumerate(deadlines.iter_rows()):
             if models is None or i % self.refit_every == 0:
                 models = self._fit(deadline)
+                if self.kumo is not None:
+                    regressors = fit_pair(self.features, deadline, self.kumo, regressors)
             pool = self._pool(season, deadline)
             xp, upside = self._expected_points(
-                season, order[i : i + self.horizon], deadline, pool, models
+                season, order[i : i + self.horizon], deadline, pool, models, regressors=regressors
             )
             truth = self.gameweeks.filter((pl.col("season") == season) & (pl.col("gameweek") == gw))
             weeks.append(
@@ -184,20 +189,23 @@ class SeasonSimulator:
             player_model.fit_components(train, defcon, planning),
         )
 
-    def _expected_points(
+    def _expected_points(  # noqa: PLR0913 - Kumo's regressors are keyword-only
         self,
         season: str,
         upcoming: list[int],
         deadline: datetime,
         pool: pl.DataFrame,
         models: tuple[player_model.FittedComponents, player_model.FittedComponents],
+        *,
+        regressors: tuple[Regressor, Regressor] | None = None,
     ) -> tuple[pl.DataFrame, pl.DataFrame]:
         next_model, planning_model = models
+        next_kumo, planning_kumo = regressors or (None, None)
         rows = self.features.filter(
             (pl.col("season") == season) & pl.col("gameweek").is_in(upcoming)
         )
         nxt = rows.filter(pl.col("gameweek") == upcoming[0])
-        parts = [(nxt, next_model)]
+        parts = [(nxt, next_model, next_kumo)]
 
         later = rows.filter(pl.col("gameweek") != upcoming[0])
         if later.height:
@@ -240,16 +248,16 @@ class SeasonSimulator:
                 )
                 .with_columns((-pl.col("opponent_lambda")).exp().alias("p_clean_sheet"))
             )
-            parts.append((later, planning_model))
+            parts.append((later, planning_model, planning_kumo))
 
         frames = []
-        for frame, model in parts:
+        for frame, model, regressor in parts:
             events = model.components(frame)
-            frames.append(
-                frame.select("player_code", "gameweek").with_columns(
-                    player_model.expected_points(frame, events)
-                )
-            )
+            points = player_model.expected_points(frame, events)
+            if regressor is not None and self.kumo is not None:
+                predicted = pl.Series(regressor.predict(frame), dtype=pl.Float64)
+                points = blend(points, predicted, self.kumo.weight).alias(points.name)
+            frames.append(frame.select("player_code", "gameweek").with_columns(points))
             if frame is nxt:
                 settings = simulator.SimulationSettings(
                     draws=2000, defcon_on=season >= player_model.DEFCON_FROM_SEASON

@@ -14,6 +14,11 @@ dependencies = [
     "scipy>=1.14",
 ]
 
+[project.optional-dependencies]
+# E19: NVIDIA Kumo Tabular (in-context tabular foundation model; pulls in PyTorch).
+# torch is direct so Linux can take the CPU-only wheels (no CUDA stack) from the index below.
+kumo = ["structured-data-models==0.2.1", "torch>=2.7"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
