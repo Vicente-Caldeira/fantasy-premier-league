@@ -694,6 +694,17 @@ This was the first model change to pass the season simulation since the xG fix. 
 - **Determinism check.** The production rerun shares 60 paths with the earlier held-out paths. 55 are identical, and the other 5 differ by up to 52 points, most likely because the optimiser's 30 s time limit binds differently under 16 parallel workers. The means agree: −3.5 (−23.0, +15.7).
 - **Lesson:** the per-gameweek backtest is a screen in both directions. A budget-free top-11 metric missed both E17's loss and E19's gain, so the season simulation stays the acceptance test.
 
+**Follow-up: Kumo as the minutes model (rejected; tuning seasons only).** A Kumo small classifier predicts the minutes class (0 / 1–59 / 60+) from the same 50k-row context. Its probabilities replace, or are averaged with, production's minutes component:
+
+| | Minutes log loss | Brier | Δ regulars MAE | Δ captain pts | Δ top-11 pts |
+|---|---|---|---|---|---|
+| production minutes | 0.5006 | 0.2780 | | | |
+| Kumo minutes | **0.4945** | **0.2754** | −0.0049 (−0.0110, +0.0004) | −0.23 (−0.72, +0.21) | +0.73 (−0.67, +2.53) |
+| average of the two | | | **−0.0046 (−0.0076, −0.0019)** | 0.00 | **+0.78 (+0.03, +1.69)** |
+| average, then 50/50 with Kumo points, **vs the adopted blend** | | | −0.0007 (−0.0022, +0.0007) | 0.00 | +0.04 (−0.45, +0.55) |
+
+Kumo predicts minutes better than production's tree, but the gain disappears once Kumo's own points are blended in, because they already carry that information. Production is unchanged and no season simulation was needed.
+
 
 ## Tried and rejected
 
