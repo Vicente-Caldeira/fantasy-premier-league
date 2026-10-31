@@ -6,7 +6,7 @@ An end-to-end ML platform that predicts **Fantasy Premier League expected points
 
 ## What it does
 
-- Models every FPL scoring event per player and fixture: minutes, goals, assists, clean sheets, goals conceded, defensive contributions, saves and bonus. These are combined into expected points over a multi-gameweek horizon.
+- Models every FPL scoring event per player and fixture: minutes, goals, assists, clean sheets, goals conceded, defensive contributions, saves and bonus. These are combined into expected points over a multi-gameweek horizon, then blended with a pretrained tabular foundation model (NVIDIA Kumo Tabular).
 - Derives team goal expectations, and from them clean-sheet probabilities, from betting market odds.
 - Optimises squads, transfers, captaincy and chip timing with mixed-integer programming.
 - Hosted web app with Google sign-in that remembers your FPL team.

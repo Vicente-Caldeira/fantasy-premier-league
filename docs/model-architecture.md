@@ -11,7 +11,9 @@ fct_player_matches ──► player features ◄────────┘
               seven component models (gradient-boosted trees)
                            │
                            ▼
-         expected events ──► FPL scoring rules ──► expected points ──► optimiser
+         expected events ──► FPL scoring rules ──► expected points ─┐
+                                                                     ├─ 50/50 ──► optimiser
+   player features ──► Kumo Tabular (pretrained, in-context) ───────┘
 ```
 
 ## 1. Team strength (`team_strength.py`)
@@ -61,6 +63,14 @@ scikit-learn **HistGradientBoosting**: gradient-boosted decision trees (the same
 - **Training data:** the latest 4 seasons, with recent rows weighted more (above). The defensive-contribution model uses every season that has CBIT data.
 - **Targets (v2):** goals and assists models learn from **xG and xA** where FPL has them (2022-23+). The expected value is the same, with far less noise than whether a 0.3 xG chance went in. This was the single largest MAE gain.
 
+## 3b. Kumo Tabular blend (`kumo.py`, E19)
+
+Live expected points are half the component model's and half **NVIDIA Kumo Tabular**'s: a pretrained tabular foundation model (the small, 28M-parameter regressor) that is never trained on our data.
+- **In-context learning:** at each run it reads a *context* of the newest 50,000 labelled fixture rows (about two seasons) with the same 34 features, and predicts each upcoming fixture's total points in one forward pass. The mean of its 999 predicted quantiles is the expected value.
+- **Label:** actual points, not the xG-denoised targets, so finishing skill stays in. That's why it rates premium players higher.
+- **Same rules as production:** later gameweeks use a context without the crowd features, and FPL's availability flags scale Kumo's points too. The upside distributions (p90, P(haul)) stay the simulator's.
+- **Why a blend:** Kumo alone has a worse MAE and correlates 0.97 with production. The blend gains from diversity: +31 points a season in the held-out season simulation (95% CI +14, +48).
+
 ## 4. From events to points
 
 The current rules from `fpl_core.scoring`, applied per fixture and summed over the gameweek:
@@ -91,7 +101,7 @@ This gives p10/p90 and P(haul ≥10) per player-gameweek. Means are calibrated, 
 - **Metrics:** MAE on regular players (the primary metric), captain points and top-11 points against hindsight, and rank correlation.
 - **Tuning discipline:** settings may only be chosen on 2021-22 and 2022-23. The 2023-26 evaluation seasons are scored once per accepted change.
 - **Season simulation** (`season_sim.py`): the end-to-end acceptance test. It manages a team through a whole past season, deciding blind at each deadline with the optimiser and scoring the real gameweek (auto-subs, captain/vice, hits, price changes). v2 scored +292 points over v1 across 2021-23.
-- **Live:** each daily run retrains on all history (about 50 s) and predicts the next 5 gameweeks. Trained models aren't persisted yet (Phase 4).
+- **Live:** each daily run retrains on all history (about 50 s), fits Kumo's two contexts on CPU (about 2.5 min on an M5 Pro), and predicts the next 5 gameweeks. Trained models aren't persisted yet (Phase 4).
 
 ## 6. Known weaknesses
 
@@ -99,6 +109,6 @@ See `docs/model-experiments.md` for the work list and results.
 
 - **Only coarse tuning so far:** a one-at-a-time grid, no joint search. The 8-gameweek feature half-life and 4-season window were tested and kept.
 - **European and cup fixtures aren't in the schedule features yet.**
-- **Premium players (11.0m+) are under-predicted by about 5%.** A price-band calibration layer didn't help on the tuning seasons and was discarded.
+- **Premium players are under-predicted.** On the held-out seasons, £10m+ players average 4.06 predicted vs 4.43 actual. The Kumo blend narrows that to 4.15 (Kumo alone: 4.23). A price-band calibration layer didn't help on the tuning seasons and was discarded.
 - **The optimiser uses only the mean:** the simulator's distributions (upside, P(haul)) aren't used for captaincy or rank risk yet.
 - **Rare events aren't modelled:** red cards, own goals and penalties.

@@ -13,8 +13,12 @@ expected value.
 - **Planning rows** (later gameweeks) use a second context without the crowd
   features, as production's planning model does.
 
-Optional dependency: `uv sync --extra kumo` (structured-data-models with PyTorch; CPU
-is enough). The weights download from Hugging Face on first use.
+Production (`expected_points`) blends it 50/50 with the component model: +31 points a
+season in the held-out season simulation (docs/model-experiments.md, E19).
+
+Optional dependency of `fpl-models`: the `kumo` extra (structured-data-models with
+PyTorch, CPU-only on Linux), which the pipelines install. The weights (revision v1.0.1)
+download from Hugging Face on first use, to `HF_HOME`.
 """
 
 from __future__ import annotations

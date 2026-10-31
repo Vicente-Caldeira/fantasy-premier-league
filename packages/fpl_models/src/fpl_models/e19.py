@@ -1,7 +1,7 @@
 """E19: Kumo Tabular alone, and blended with production, in the walk-forward backtest.
 
-    uv run --extra kumo python -m fpl_models.e19              # tuning seasons
-    uv run --extra kumo python -m fpl_models.e19 --held-out   # once, for the accepted blend
+    uv run python -m fpl_models.e19              # tuning seasons
+    uv run python -m fpl_models.e19 --held-out   # once, for the accepted blend
 
 Kumo's predictions and production's (`r4_xg_1`) come from the same `run_backtest`
 harness. Blends mix the two per player-gameweek, and every result is a paired bootstrap

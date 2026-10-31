@@ -15,6 +15,7 @@ x-dagster: &dagster
     MLFLOW_TRACKING_URI: http://mlflow:5000
     FPL_LAKE_URL: /data
     FPL_WAREHOUSE: /data/warehouse.duckdb
+    HF_HOME: /data/huggingface # Kumo Tabular weights (E19): downloaded once, kept on the volume
   volumes:
     - ./pipelines/dagster_home:/opt/dagster_home:ro
     - lake:/data

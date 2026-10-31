@@ -625,6 +625,73 @@ Every feature is null outside cup coverage: before 2025-26, and after a season's
   - The trees see these columns non-null in at most 18% of training rows (by the end of 2025-26) and 26% (2026-27).
 - **What would change the call:** re-run at the end of 2026-27 (two seasons of coverage). Also try the load features in the minutes model only, where 2026-27 shows the clearest signal, rather than in every component. The data and features stay in place.
 
+## E19: a tabular foundation model (NVIDIA Kumo Tabular)
+
+**Model.** Kumo Tabular (`nvidia/Kumo-Tabular`, released 2026-09-28; library `structured-data-models` 0.2.1; code Apache-2.0, weights OpenMDW-1.1) is a pretrained in-context learner in the TabICL style. It is never trained on our data:
+- each refit caches a *context* of labelled rows;
+- each prediction is one forward pass over the context and the new rows;
+- regression returns 999 quantiles, and their mean is the expected value.
+
+NVIDIA reports first place on TabArena. That claim is not verified here, and NVIDIA's own model card warns of degradation under distribution shift.
+
+**Setup** (`fpl_models.kumo`):
+- **Context:** the newest 50,000 labelled fixture rows (about two seasons) with a deadline strictly before the one being predicted. This is the same cut as `ComponentModel`, which also sets the refit schedule (every 4 gameweeks).
+- **Features and label:** production's 34 features, with total points as the label. The label is *actual* points, not production's xG-denoised targets, so finishing skill stays in.
+- **Planning rows** (later gameweeks) use a second context without the crowd features, as production's planning model does.
+- **Blend:** `(1 − w) × production + w × Kumo`, per player-gameweek.
+- **Live predictions:** Kumo's points are scaled by the same availability factor, and the upside quantiles stay production's.
+- **Speed:** on an M5 Pro CPU, the small model (28M parameters) takes about 77 s to fit at 50k context rows and about 1 s to predict a gameweek. Apple's GPU (MPS) is slower at this context size: 217 s to predict.
+
+**Tuning seasons (2021-23), paired walk-forward backtest vs `r4_xg_1`** (per gameweek, 95% CI):
+
+| Variant | Δ regulars MAE | Δ captain pts | Δ top-11 pts |
+|---|---|---|---|
+| Kumo small, 30k context | +0.040 (+0.031, +0.050) | −0.32 (−2.00, +1.39) | −0.66 (−3.25, +1.81) |
+| Kumo small, 50k context | +0.023 (+0.015, +0.033) | +0.73 (−0.76, +2.27) | +1.48 (−1.29, +4.20) |
+| blend, w = 0.25 | +0.001 (−0.001, +0.003) | +0.13 (−0.92, +1.24) | **+1.73 (+0.25, +3.35)** |
+| **blend, w = 0.5** (`v4kumo50`) | +0.005 (+0.001, +0.010) | +0.52 (−0.72, +1.79) | **+2.76 (+0.75, +4.68)** |
+
+- **Kumo is better calibrated at the top.** Mean prediction is 1.318 vs 1.310 actual (production: 1.284). £10m+ players are 4.68 (production 4.62; actual 5.15).
+- **It mostly agrees with production** (correlation 0.971), so the blend gains from diversity, not a better model. Kumo alone has a worse MAE.
+
+**Tuning-season simulation** (40 paths per season, vs production on the same code):
+
+| Season | Production | `v4kumo50` | Δ | Hits (prod → blend) |
+|---|---|---|---|---|
+| 2021-22 | 2126.3 | 2155.6 | +29.3 | 48.3 → 44.4 |
+| 2022-23 | 2204.0 | 2239.4 | +35.4 | 24.9 → 19.3 |
+| **Both** | | | **+32.4 (+10.9, +54.4)** per season | |
+
+This was the first model change to pass the season simulation since the xG fix. With chips added, the estimated overall rank moves from about 1.45M to 1.25M (2021-22) and from 2.21M to 1.79M (2022-23).
+
+**Held-out seasons (2023-26), scored once.** The production rerun reproduces the saved held-out predictions exactly.
+
+| Variant | Δ regulars MAE | Δ captain pts | Δ top-11 pts |
+|---|---|---|---|
+| Kumo small, 50k context | +0.006 (−0.001, +0.012) | −0.29 (−1.12, +0.52) | −1.39 (−3.27, +0.47) |
+| blend, w = 0.25 | **−0.002 (−0.004, −0.001)** | +0.15 (−0.24, +0.54) | +0.09 (−0.99, +1.18) |
+| blend, w = 0.5 | −0.002 (−0.006, +0.001) | +0.39 (−0.10, +0.88) | −0.31 (−1.72, +1.06) |
+
+- **The tuning top-11 gain does not replicate** (+2.76 → −0.31).
+- Correlation with production (0.975) and better premium calibration do carry over: £10m+ players are 4.23 vs production's 4.06 (actual 4.43).
+
+**Held-out season simulation** (the acceptance test; 40 paths per season, vs production rerun on the same code):
+
+| Season | Production | `v4kumo50` | Δ (95% CI) | Hits (prod → blend) | Est. overall rank with chips (prod → blend) |
+|---|---|---|---|---|---|
+| 2023-24 | 2318.2 | 2370.8 | +52.7 (+25.3, +79.1) | 20.6 → 16.6 | 611k (5.6%) → 333k (3.1%) |
+| 2024-25 | 2204.4 | 2192.5 | −11.9 (−46.2, +22.2) | 16.2 → 12.7 | 2.28M (19.9%) → 2.44M (21.4%) |
+| 2025-26 | 2037.6 | 2090.1 | +52.5 (+26.9, +77.5) | 8.8 → 7.0 | 2.30M (17.7%) → 1.50M (11.5%) |
+| **All three** | | | **+31.1 (+14.1, +47.7)** per season | | |
+
+- **Decision: adopted.** The rule, fixed before the held-out run, was to adopt only if the held-out season gain is positive with a 95% CI excluding zero. It is, and the size matches the tuning seasons (+32.4). Production's `expected_points` is now 50% component model, 50% Kumo small.
+- **Season points rose with no top-11 gain.** This is the reverse of E17, where the backtest's top-11 rose and season points fell. Two things carry the gain:
+  - **Fewer hits in all five seasons,** 2 to 6 fewer each season. The blend also revises its top 100 players' expected points less from one deadline to the next, in all five seasons (e.g. 2025-26: 0.57 → 0.51 points). That fits a smoother ranking with fewer marginal transfers, but the effect is small, so treat it as a likely explanation, not a proven one.
+  - **Captain:** +0.39 a gameweek (−0.10, +0.88), about +15 points a season.
+- **Determinism check.** The production rerun shares 60 paths with the earlier held-out paths. 55 are identical, and the other 5 differ by up to 52 points, most likely because the optimiser's 30 s time limit binds differently under 16 parallel workers. The means agree: −3.5 (−23.0, +15.7).
+- **Lesson:** the per-gameweek backtest is a screen in both directions. A budget-free top-11 metric missed both E17's loss and E19's gain, so the season simulation stays the acceptance test.
+
+
 ## Tried and rejected
 
 | Change | Tuning-season result | Decision |

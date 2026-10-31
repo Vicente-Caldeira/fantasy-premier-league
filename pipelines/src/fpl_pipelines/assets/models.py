@@ -9,7 +9,7 @@ import dagster as dg
 import duckdb
 import polars as pl
 
-from fpl_models import optimizer, player_features, player_model, shadow, team_strength
+from fpl_models import kumo, optimizer, player_features, player_model, shadow, team_strength
 from fpl_models.backtest import Predictor
 from fpl_models.baselines import BASELINES
 from fpl_models.data import load_player_matches, next_gameweeks, player_gameweeks
@@ -163,8 +163,8 @@ def expected_points(lake: Lake) -> dg.MaterializeResult[None]:
     """Expected points per player for each of the next five gameweeks (by FPL deadline).
 
     Component models trained on all history, applied to each squad player's latest
-    state and the current team-strength fixture expectations, adjusted for FPL's
-    availability flags.
+    state and the current team-strength fixture expectations, blended 50/50 with Kumo
+    Tabular (E19), and adjusted for FPL's availability flags.
     """
     warehouse = _warehouse()
     matches = team_strength.load_matches(warehouse)
@@ -180,7 +180,13 @@ def expected_points(lake: Lake) -> dg.MaterializeResult[None]:
     with duckdb.connect(str(warehouse), read_only=True) as connection:
         squads = connection.sql("select * from current_squads").pl()
     predictions = player_model.predict_upcoming(
-        features, squads, fixtures, gameweeks, config=player_model.PRODUCTION, schedule=schedule
+        features,
+        squads,
+        fixtures,
+        gameweeks,
+        config=player_model.PRODUCTION,
+        schedule=schedule,
+        kumo=kumo.PRODUCTION,
     )
 
     path = f"gold/player_points/expected_points/as_of={_stamp()}/data.parquet"
@@ -191,6 +197,7 @@ def expected_points(lake: Lake) -> dg.MaterializeResult[None]:
         metadata={
             "uri": uri,
             "players": predictions["player_code"].n_unique(),
+            "kumo_weight": kumo.PRODUCTION.weight,
             "gameweeks": ", ".join(str(g) for g in predictions["gameweek"].unique().sort()),
             "top_next_gameweek": dg.MetadataValue.md(to_markdown(top, top.columns)),
         }

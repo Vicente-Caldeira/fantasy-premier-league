@@ -5,7 +5,7 @@ description = "Dagster code location: ingestion, transformation, training and in
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fpl-core",
-    "fpl-models",
+    "fpl-models[kumo]",
     "dagster>=1.9",
     "dagster-postgres>=0.25",
     "dagster-webserver>=1.9",
