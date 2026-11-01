@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import dagster as dg
 from dagster_dbt import DbtCliResource
 
+from fpl_pipelines import pre_deadline
 from fpl_pipelines.assets import (
     football_data,
     fpl_api,
@@ -136,6 +137,8 @@ defs = dg.Definitions(
         fixtures_refresh_schedule,
         matches_refresh_schedule,
     ],
+    # ~2 h before each deadline: re-snapshot FPL, then rebuild the warehouse and models.
+    sensors=pre_deadline.build_sensors(daily_snapshot_job, warehouse_job),
     resources={
         "fpl_api": FplApiResource(),
         "football_data": football_data.FootballDataResource(),

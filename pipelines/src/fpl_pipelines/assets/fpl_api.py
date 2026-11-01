@@ -43,9 +43,15 @@ def _snapshot(
 def bootstrap_static(
     context: dg.AssetExecutionContext, fpl_api: FplApiResource, lake: Lake
 ) -> dg.MaterializeResult[None]:
-    """Raw `/bootstrap-static/`: teams, gameweeks, positions, every player's state."""
+    """Raw `/bootstrap-static/`: teams, gameweeks, positions, every player's state.
+
+    Re-runs on the same day refresh it, so the pre-deadline run sees current status,
+    chance of playing and transfers (`fpl_pipelines.pre_deadline`).
+    """
     with fpl_api.client() as client:
-        return _snapshot(context, lake, "bootstrap_static", client.bootstrap_static)
+        return _snapshot(
+            context, lake, "bootstrap_static", client.bootstrap_static, refresh_today=True
+        )
 
 
 @dg.asset(key_prefix=BRONZE, partitions_def=daily_snapshots, group_name="fpl_bronze")

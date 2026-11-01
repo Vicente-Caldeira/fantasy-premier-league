@@ -140,13 +140,13 @@ def test_scoring_check_flags_points_that_disagree(lake, monkeypatch):
     assert check.metadata["mismatches"].value > 0
 
 
-def test_rerun_reuses_existing_snapshot_without_calling_api(lake):
+def test_rerun_today_refetches_only_the_sources_that_change_during_the_day(lake):
     run(lake)
-    first = lake.read_bytes(fpl_api.bronze_path("bootstrap_static", TODAY))
-    result = run(lake)
-    assert result.success
-    assert CALLS == ["fixtures"]  # only fixtures refresh during the day
-    assert lake.read_bytes(fpl_api.bronze_path("bootstrap_static", TODAY)) == first
+    CALLS.clear()
+    assert run(lake).success
+    # Players' status/transfers (pre-deadline refresh) and fixtures (results) refresh;
+    # every other snapshot of the day is reused.
+    assert sorted(CALLS) == ["bootstrap_static", "fixtures"]
 
 
 def test_rerun_today_refreshes_fixtures_with_latest_results(lake, monkeypatch):
