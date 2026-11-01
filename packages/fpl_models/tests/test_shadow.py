@@ -115,3 +115,15 @@ def test_played_returns_plain_integers_that_serialise(tmp_path):
     played = shadow._played(warehouse, "2026-27", 8)
     assert played["points"].dtype == pl.Int32
     json.dumps(dict(zip(played["player_code"], played["points"], strict=True)))
+
+
+def test_missed_deadlines_hold_the_squad_and_bank_free_transfers():
+    pick = shadow.Pick(
+        gameweek=8, squad=[1], lineup=[1], bench=[], captain=1, vice_captain=1,
+        transfers_in=[], transfers_out=[], hits=0, expected_points=0.0, points=50,
+    )  # fmt: skip
+    state = shadow.State(season="2026-27", squad=[1], paid={1: 50}, bank=0, free_transfers=1,
+                         history=[pick])  # fmt: skip
+    held, n = shadow.hold_missed(state, next_gameweek=10)  # GW9 had no plan
+    assert (n, held.free_transfers, held.total) == (1, 2, 50)
+    assert shadow.hold_missed(state, next_gameweek=9) == (state, 0)
