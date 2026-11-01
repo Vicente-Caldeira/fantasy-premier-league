@@ -38,6 +38,8 @@ CONFIGS = {
     "v3blend25": experiments.EXPERIMENTS["r12_blend25"],
     "v4kumo50": player_model.PRODUCTION,  # E19: half Kumo Tabular (see KUMO)
     "v5defcon": experiments.EXPERIMENTS["r24_defcon_opta"],  # E24
+    "v2now": player_model.PRODUCTION,  # production re-prepared with E23-E24's code and data
+    "v6bps": experiments.EXPERIMENTS["r23_bps_bonus"],  # E23
 }
 KUMO = {"v4kumo50": kumo.KumoConfig(weight=0.5)}
 SETTINGS = optimizer.Settings(time_limit_seconds=30)
