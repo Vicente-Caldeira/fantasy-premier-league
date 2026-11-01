@@ -1,5 +1,8 @@
-"""Understat ingestion: one league JSON per season (2014-15 onwards), versioned on change."""
+"""Understat ingestion (2014-15 onwards), versioned on change: one league JSON per season,
+and every played match's rosters and shots (one request per match, fetched once)."""
 
+import json
+import time
 from collections.abc import Callable
 
 import dagster as dg
@@ -22,6 +25,8 @@ understat_seasons = dg.StaticPartitionsDefinition(
 
 class UnderstatResource(dg.ConfigurableResource):  # type: ignore[type-arg]
     base_url: str = src.BASE_URL
+    # Match data is one request per match: pace them (a backfill is ~380 per season).
+    request_interval_seconds: float = 1.0
 
     def client(self, season: str) -> RetryingHttpClient:
         return RetryingHttpClient(self.base_url, headers=src.request_headers(season))
@@ -29,6 +34,10 @@ class UnderstatResource(dg.ConfigurableResource):  # type: ignore[type-arg]
 
 def season_prefix(season: str) -> str:
     return f"bronze/understat/league/season={season}"
+
+
+def match_data_prefix(season: str) -> str:
+    return f"bronze/understat/match_data/season={season}"
 
 
 @dg.asset(key_prefix=BRONZE, partitions_def=understat_seasons, group_name="understat_bronze")
@@ -153,4 +162,103 @@ def team_logs_agree_with_matches(
         passed=metadata["rows"] == metadata["expected_rows"] == joined.height
         and metadata["unlinked"] == metadata["goal_mismatches"] == metadata["xg_mismatches"] == 0,
         metadata=metadata,
+    )
+
+
+@dg.asset(
+    key_prefix=BRONZE,
+    partitions_def=understat_seasons,
+    group_name="understat_bronze",
+    ins={"matches": dg.AssetIn(key=matches.key)},
+)
+def match_data(
+    context: dg.AssetExecutionContext,
+    understat: UnderstatResource,
+    lake: Lake,
+    matches: pl.DataFrame,
+) -> dg.MaterializeResult[None]:
+    """Every played match's rosters and shots, one JSON per season keyed by match id.
+
+    Only played matches missing from the latest version are fetched, so the weekly
+    refresh costs one request per new match. A new version is stored only on change.
+    """
+    season = context.partition_key
+    prefix = match_data_prefix(season)
+    latest = latest_version(lake, prefix)
+    stored: dict[str, object] = json.loads(lake.read_bytes(latest)) if latest else {}
+    played = matches.filter(pl.col("is_result"))["match_id"].sort().to_list()
+    missing = [m for m in played if str(m) not in stored]
+    with understat.client(season) as client:
+        for i, match_id in enumerate(missing):
+            if i:
+                time.sleep(understat.request_interval_seconds)
+            stored[str(match_id)] = src.strip_match_payload(
+                client.get(src.match_path(match_id)).content
+            )
+    data = json.dumps(stored, sort_keys=True, separators=(",", ":")).encode()
+    result = store_version(lake, prefix, data, "json")
+    return dg.MaterializeResult(
+        metadata={**(result.metadata or {}), "fetched": len(missing), "matches": len(stored)}
+    )
+
+
+@dg.asset(
+    key_prefix=SILVER,
+    partitions_def=understat_seasons,
+    group_name="understat_silver",
+    io_manager_key="parquet_io_manager",
+    metadata={"partition_column": "season"},
+    deps=[match_data],
+    ins={"matches": dg.AssetIn(key=matches.key)},
+)
+def player_matches(
+    context: dg.AssetExecutionContext, lake: Lake, matches: pl.DataFrame
+) -> pl.DataFrame:
+    """Per player per match: minutes, goals, shots, key passes, xG, npxG, xA, xGChain."""
+    season = context.partition_key
+    latest = latest_version(lake, match_data_prefix(season))
+    if latest is None:
+        raise dg.Failure(f"No Understat match data for {season}")
+    return src.player_matches_table(json.loads(lake.read_bytes(latest)), season, matches)
+
+
+@dg.asset_check(
+    asset=player_matches,
+    blocking=True,
+    partitions_def=understat_seasons,
+    additional_ins={"matches": dg.AssetIn(key=matches.key)},
+)
+def rosters_agree_with_scores(
+    player_matches: pl.DataFrame, matches: pl.DataFrame
+) -> dg.AssetCheckResult:
+    """Every played match has both rosters, and each side's goals (its players' goals plus
+    the opponents' own goals) equal the match score."""
+    played = matches.filter(pl.col("is_result"))
+    side = player_matches.group_by("match_id", "is_home").agg(
+        pl.col("goals").sum(), pl.col("own_goals").sum()
+    )
+    scored = side.join(
+        side.select("match_id", pl.col("is_home").not_(), pl.col("own_goals").alias("opp_og")),
+        on=["match_id", "is_home"],
+        how="left",
+    ).with_columns(scored=pl.col("goals") + pl.col("opp_og").fill_null(0))
+    expected = pl.concat(
+        [
+            played.select(
+                "match_id",
+                pl.lit(side == "home").alias("is_home"),
+                pl.col(f"{side}_goals").alias("score"),
+            )
+            for side in ("home", "away")
+        ]
+    )
+    joined = expected.join(scored, on=["match_id", "is_home"], how="left")
+    metadata = {
+        "rows": player_matches.height,
+        "played_matches": played.height,
+        "sides_missing": joined["scored"].null_count(),
+        "score_mismatches": joined.filter(pl.col("scored") != pl.col("score")).height,
+    }
+    return dg.AssetCheckResult(
+        passed=metadata["sides_missing"] == metadata["score_mismatches"] == 0, metadata=metadata
     )

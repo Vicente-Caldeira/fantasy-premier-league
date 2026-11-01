@@ -102,6 +102,10 @@ class ModelConfig:
     # 2022-23+): 1.0 = expected only (least noise), 0.0 = actual only. Pure xG
     # under-rewards finishers who consistently beat it, so a blend may be best.
     denoise_weight: float = 0.0
+    # E20: where expected goals/assists come from, for features and denoised targets
+    # (`understat.XG_SOURCES`): "fpl" (2022-23+ only), or Understat filled in before.
+    # Applied when the features are built (`experiments.load_features`).
+    xg_source: str = "fpl"
     # Rescale players' expected goals/assists so each team's add up to its expected
     # goals (live GW8: player sums ranged from 57% to 126% of team lambda).
     reconcile: bool = False

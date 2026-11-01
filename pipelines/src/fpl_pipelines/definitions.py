@@ -84,7 +84,8 @@ understat_refresh_job = dg.define_asset_job(
 
 @dg.schedule(job=understat_refresh_job, cron_schedule="15 8 * * 1", execution_timezone="UTC")
 def understat_refresh_schedule() -> dg.RunRequest:
-    """Mondays 08:15 UTC: one polite request for the current season."""
+    """Mondays 08:15 UTC: the current season's league JSON, plus one request per match
+    played since the last run."""
     return dg.RunRequest(partition_key=current_season())
 
 

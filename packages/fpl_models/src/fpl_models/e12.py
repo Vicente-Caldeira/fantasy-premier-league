@@ -80,37 +80,49 @@ def posthoc(predictions: pl.DataFrame, table: pl.DataFrame) -> pl.DataFrame:
 OUT = Path("data/experiments/e12")
 
 
-def run_variant(name: str) -> None:
-    """Backtest one round-8 config on the tuning seasons; keep row-level predictions so
-    it can be scored raw and with the live multiplier on top."""
+def run_variant(
+    name: str, seasons: tuple[str, ...] = experiments.TUNING_SEASONS, out: Path = OUT
+) -> None:
+    """Backtest one config (round 8 on the tuning seasons; E22 on the late split); keep
+    row-level predictions so it can be scored raw and with the live multiplier on top."""
     gameweeks = player_gameweeks(load_player_matches(DEFAULT_WAREHOUSE))
     features = experiments.load_features(DEFAULT_WAREHOUSE)
     model = player_model.ComponentModel(features, config=experiments.EXPERIMENTS[name], name=name)
-    predictions = run_backtest(model, gameweeks, experiments.TUNING_SEASONS).predictions
-    OUT.mkdir(parents=True, exist_ok=True)
-    predictions.select(*KEY, "predicted", "points").write_parquet(OUT / f"{name}_rows.parquet")
+    predictions = run_backtest(model, gameweeks, seasons).predictions
+    out.mkdir(parents=True, exist_ok=True)
+    predictions.select(*KEY, "predicted", "points").write_parquet(out / f"{name}_rows.parquet")
     print(f"{name}: done", flush=True)
 
 
-def score() -> None:
-    """Every variant raw and x multiplier, against production raw and production x multiplier."""
+def score(out: Path = OUT, base: str = "r8_base", min_gameweek: int = 1) -> None:
+    """Every variant raw and x multiplier, against production raw and production x multiplier.
+    `min_gameweek` scores only gameweeks from there on (E22: where fresh snapshots exist)."""
     gameweeks = player_gameweeks(load_player_matches(DEFAULT_WAREHOUSE))
     deadlines = gameweeks.select("season", "gameweek", "deadline_utc").unique()
     table = availability.features(availability.align(availability.load("data"), deadlines))
-    base_rows = pl.read_parquet(OUT / "r8_base_rows.parquet")
+    gameweeks = gameweeks.filter(pl.col("gameweek") >= min_gameweek)
+
+    def rows_of(name: str) -> pl.DataFrame:
+        frame = pl.read_parquet(out / f"{name}_rows.parquet")
+        return frame.filter(pl.col("gameweek") >= min_gameweek)
+
+    base_rows = rows_of(base)
     raw = experiments.per_gameweek(base_rows, gameweeks)
     post = experiments.per_gameweek(posthoc(base_rows, table), gameweeks)
-    rows = [{"variant": "r8_base x multiplier", "vs": "raw", **experiments.compare(post, raw)}]
-    for file in sorted(OUT.glob("r8_*_rows.parquet")):
+    rows = [{"variant": f"{base} x multiplier", "vs": "raw", **experiments.compare(post, raw)}]
+    prefix = base.split("_", 1)[0]
+    for file in sorted(out.glob(f"{prefix}*_rows.parquet")):
         name = file.name.removesuffix("_rows.parquet")
-        if name == "r8_base":
+        if name == base:
             continue
-        predictions = pl.read_parquet(file)
+        predictions = rows_of(name)
         variants = {name: predictions, f"{name} x multiplier": posthoc(predictions, table)}
         for label, frame in variants.items():
             per_gw = experiments.per_gameweek(frame, gameweeks)
-            for against, base in (("raw", raw), ("posthoc", post)):
-                rows.append({"variant": label, "vs": against, **experiments.compare(per_gw, base)})
+            for against, reference in (("raw", raw), ("posthoc", post)):
+                rows.append(
+                    {"variant": label, "vs": against, **experiments.compare(per_gw, reference)}
+                )
     with pl.Config(tbl_rows=30, tbl_cols=-1, tbl_width_chars=250, float_precision=4):
         print(pl.DataFrame(rows))
 
@@ -119,14 +131,18 @@ def main() -> None:
     import argparse  # noqa: PLC0415
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--variant", help="backtest one round-8 config")
+    parser.add_argument("--variant", help="backtest one config")
     parser.add_argument("--score", action="store_true")
+    parser.add_argument("--seasons", nargs="+", default=list(experiments.TUNING_SEASONS))
+    parser.add_argument("--out", type=Path, default=OUT)
+    parser.add_argument("--base", default="r8_base", help="variant scored against (score)")
+    parser.add_argument("--min-gameweek", type=int, default=1, help="score from this gameweek")
     args = parser.parse_args()
     if args.variant:
-        run_variant(args.variant)
+        run_variant(args.variant, tuple(args.seasons), args.out)
         return
     if args.score:
-        score()
+        score(args.out, args.base, args.min_gameweek)
         return
     gameweeks = player_gameweeks(load_player_matches(DEFAULT_WAREHOUSE))
     deadlines = gameweeks.select("season", "gameweek", "deadline_utc").unique()

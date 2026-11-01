@@ -108,6 +108,14 @@ models:
       - name: understat_player_id
         data_tests: [not_null]
 
+  - name: fct_understat_player_matches
+    description: Understat per player per match with xG, npxG, xA, shots, key passes, xGChain and xGBuildup, keyed by match_key and team_key.
+    columns:
+      - name: match_key
+        data_tests:
+          - not_null
+          - relationships: {to: ref('fct_matches'), field: match_key}
+
   - name: dim_player_seasons
     description: One row per FPL player and season, with club and names.
     columns:

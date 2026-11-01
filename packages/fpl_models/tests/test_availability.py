@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+import subprocess
+from datetime import UTC, datetime, timedelta
 
 import polars as pl
 
@@ -75,3 +76,36 @@ def test_live_multiplier_scales_the_coming_week_and_zeroes_players_who_left():
     scaled = apply_availability(xp, e12.by_gameweek(factors, "2022-23")[1], gameweek=1)
     assert scaled["expected_points"].to_list() == [2.0, 4.0, 0.0, 0.0, 2.0]
     assert scaled.columns == xp.columns
+
+
+def test_core_insights_reads_the_last_commit_before_each_deadline():
+    t0 = datetime(2025, 11, 1, tzinfo=UTC)
+    commits = [("a", t0), ("b", t0 + timedelta(hours=10)), ("c", t0 + timedelta(hours=30))]
+    deadlines = [t0 + timedelta(hours=12), t0 + timedelta(hours=40), t0 - timedelta(hours=1)]
+    assert availability.last_before(commits, deadlines) == {"b", "c"}  # none before the 3rd
+    assert availability.last_before(commits, [t0 + timedelta(hours=10)]) == {"a"}  # strictly
+
+
+def test_core_insights_snapshot_takes_each_players_highest_gameweek_row(tmp_path):
+    repo = tmp_path / "core"
+    path = repo / availability.core_path("2025-26")
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "id,status,chance_of_playing_next_round,news,gw\n"
+        "7,a,,,10\n7,d,50,Knock,11\n8,i,0,Hamstring,11\n9,a,,,11\n"
+    )
+
+    def git(*args):
+        command = ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args]
+        return subprocess.run(command, check=True, capture_output=True, text=True).stdout  # noqa: S603
+
+    git("init", "-q")
+    git("add", ".")
+    git("commit", "-qm", "x")
+    elements = pl.DataFrame({"season": ["2025-26"] * 2, "element": [7, 8], "player_code": [70, 80]})
+    sha = git("rev-parse", "HEAD").strip()
+    snap = availability.read_core_snapshot(repo, sha, "2025-26", elements)
+    assert snap.sort("code").select("code", "status", "chance_of_playing_next_round").rows() == [
+        (70, "d", 50.0),
+        (80, "i", 0.0),
+    ]  # element 9 isn't in the warehouse, so it's dropped
