@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 import dagster as dg
 from dagster_dbt import DbtCliResource
 
+from fpl_pipelines import pre_deadline
 from fpl_pipelines.assets import (
     football_data,
     fpl_api,
@@ -84,7 +85,8 @@ understat_refresh_job = dg.define_asset_job(
 
 @dg.schedule(job=understat_refresh_job, cron_schedule="15 8 * * 1", execution_timezone="UTC")
 def understat_refresh_schedule() -> dg.RunRequest:
-    """Mondays 08:15 UTC: one polite request for the current season."""
+    """Mondays 08:15 UTC: the current season's league JSON, plus one request per match
+    played since the last run."""
     return dg.RunRequest(partition_key=current_season())
 
 
@@ -135,6 +137,8 @@ defs = dg.Definitions(
         fixtures_refresh_schedule,
         matches_refresh_schedule,
     ],
+    # ~2 h before each deadline: re-snapshot FPL, then rebuild the warehouse and models.
+    sensors=pre_deadline.build_sensors(daily_snapshot_job, warehouse_job),
     resources={
         "fpl_api": FplApiResource(),
         "football_data": football_data.FootballDataResource(),

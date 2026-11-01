@@ -168,9 +168,9 @@ In the 6 gameweeks where a defender was the model's top pick, he scored 8.8 on a
 | **Season simulation as the acceptance test** | Total points is the real objective; per-gameweek metrics are proxies | **In progress** |
 | **Risk-aware captaincy and optimiser** (simulator distributions: p90, P(haul)) | Captain picks and rank depend on upside; expected value alone undervalues premiums | Next |
 | **European and cup fixtures** (minutes, rest) | Rotation for clubs in Europe | Needs other-competition ingestion (Elo-Insights has it from 2025-26) |
-| **Opta features** (touches in box, chances created, xGOT) | Richer attacking signal | Data only from 2024-25: needs a separate tuning split (e.g. tune on 2024-25, hold out 2025-26) |
-| **Daily snapshots → availability model** (news, status, chance of playing) | Minutes are the largest error source | Data accrues from 2026-10-17; train once a season of snapshots exists |
-| **Prediction timing** (run ~2 h before each deadline) | Crowd share and news are most complete near the deadline | Dagster sensor on `dim_gameweeks` |
+| ~~Opta features~~ (touches in box, chances created, xGOT) | Richer attacking signal | **E21:** screened on 2024-25 (late split), no MAE gain and top-11 −2.4. Rejected |
+| **Daily snapshots → availability model** (news, status, chance of playing) | Minutes are the largest error source | **E22:** fresh history from FPL-Core-Insights (2024-25 GW20+). Learned flags still lose to the multiplier, but fresh flags beat stale ones by 0.027 MAE |
+| ~~Prediction timing~~ (run ~2 h before each deadline) | Crowd share and news are most complete near the deadline | **Done** (E22): `fpl_pipelines.pre_deadline` sensors |
 | **Per-position models, share-of-team features, hyperparameter search** | Further accuracy | After the above |
 | **Chip strategy** (wildcard, free hit, bench boost, triple captain) | Large point swings per season | Simulator + optimiser make it testable |
 
@@ -769,10 +769,104 @@ Wall times overlap other jobs, so they only rank the variants.
 - **The tuning +37.2 was mostly selection.** It was the best of about ten variants simulated on two seasons, so part of it was luck. This is why the held-out seasons are scored once and never tuned on.
 - **Production keeps the newest 50k rows.** `context_stride` stays available (default 1) for later experiments.
 
-**Next:** better labels and features for the seasons before FPL's xG.
-- FPL publishes xG only from 2022-23. Every row before that has no xG target for the component model and no `expected_goals_per90` / `expected_assists_per90` feature. So the tuning seasons, and most of the first held-out season, are modelled almost without xG, while live training data (2022-23 onward) has it throughout.
-- Understat publishes per-player, per-match xG and xA back to 2014-15. The E3a name matching already links Understat players to FPL's.
-- The xG-denoised Kumo label (goals and assists replaced by xG and xA) waits on this. With FPL xG alone, only about half of 2022-23's context rows change on the tuning seasons.
+**Next** (done in E20): better labels and features for the seasons before FPL's xG, from Understat's per-match data.
+
+## E20: Understat per-match xG before FPL's (rejected; the data stays)
+
+**Why.** FPL publishes xG and xA only from 2022-23. Every earlier row had no xG target for the component model and no `expected_goals_per90` / `expected_assists_per90` feature.
+
+**Data.** Understat's `/getMatchData/<id>` gives each match's rosters (minutes, goals, shots, key passes, xG, xA, xGChain, xGBuildup) and shots (so penalty xG is known per player-match).
+- New assets: `bronze/understat/match_data` (one JSON per season; only matches missing from the latest version are fetched, one request a second) and `silver/understat/player_matches`.
+- A blocking check requires both rosters for every played match, with each side's goals plus the opponents' own goals equal to the score.
+- dbt mart: `fct_understat_player_matches`. All 13 seasons from 2014-15 are backfilled and pass the check.
+- **Matching** (`fpl_models.understat`, E3a's name crosswalk within club and season) links 96–98.5% of played FPL rows. Where both sources exist (2022-23 onwards), per player-match correlation is 0.93–0.95 for xG and 0.72–0.75 for xA.
+
+**Variants** (`ModelConfig.xg_source`, applied when features are built):
+- `fill`: FPL's xG where it exists, Understat's before.
+- `understat`: Understat's wherever the player is matched.
+- `UNDERSTAT_FEATURES`: Understat shots, key passes, npxG, xGChain and xGBuildup per 90.
+
+Live training (the last four seasons) already has FPL's xG, so `fill` mostly makes the backtests look like live.
+
+**Tuning seasons, vs production (`r20_fpl`, MAE 1.8255, the same as `r4_xg_1`):**
+
+| Variant | Δ regulars MAE | Δ captain pts | Δ top-11 pts |
+|---|---|---|---|
+| `fill` | +0.0029 (−0.0002, +0.0062) | +0.38 (−0.80, +1.53) | +0.30 (−1.64, +2.32) |
+| `understat` | **+0.0052 (+0.0023, +0.0085)** | +0.46 (−0.64, +1.61) | +0.52 (−1.47, +2.55) |
+| `fill` + Understat features | +0.0018 (−0.0011, +0.0050) | +0.15 (−1.12, +1.39) | +0.88 (−1.53, +3.32) |
+| `understat` + Understat features | **+0.0037 (+0.0007, +0.0068)** | +0.18 (−1.13, +1.49) | +0.90 (−1.49, +3.35) |
+
+A first run left xG null, not 0, for players who didn't play, unlike FPL's own data. Fixing that changed nothing material; the table shows the fixed run.
+
+- **Missing xG history did not distort the backtests.** Filling it in moves nothing, so earlier experiment conclusions stand.
+- **FPL's (Opta's) xG is the better signal.** Replacing it with Understat's is slightly but significantly worse.
+- **Understat's extra stats add no accuracy.** Their +0.8 top-11 is inside the noise.
+- **Production keeps FPL's xG only** (`xg_source="fpl"`). The Understat tables stay as clean history for later work.
+
+**Kumo** (seeded runs, tuning seasons, 50/50 blends with production):
+
+| Variant | Compared with | Δ regulars MAE | Δ captain pts | Δ top-11 pts |
+|---|---|---|---|---|
+| Kumo on `fill` features | the adopted blend | +0.003 (+0.001, +0.006) | +0.05 (−0.41, +0.51) | −1.32 (−2.56, −0.09) |
+| `fill` features + xG-denoised label | Kumo on `fill` features (same seed) | **+0.004 (+0.002, +0.005)** | −0.04 (−0.36, +0.27) | +0.54 (−0.55, +1.55) |
+
+- **The xG label hurts Kumo.** The label is points with goals and assists replaced by xG and xA, now available for every context row. Kumo then over-predicts (1.341 against 1.310 actual) and rates £10m+ players lower (4.54, against 4.64 with actual points as the label and 5.15 actual). That's E18's finishing-skill effect again: premium attackers beat their xG, and an xG label erases that.
+- **`fill` features don't help Kumo either.** The adopted Kumo run was not seeded, so the first comparison carries about ±0.004 MAE of run-to-run noise. The scratch scripts are seeded from now on.
+- **Kumo stays as adopted** (actual points label, FPL xG features).
+
+## E21–E22: data that only exists from 2024-25 (Opta detail, fresh availability)
+
+**Protocol, pre-registered** before any result:
+- Opta detail starts in 2024-25. Fresh availability snapshots start at 2024-25 GW20.
+- Neither exists on the 2021-23 tuning seasons, so both use a late split: screen on 2024-25, then score 2025-26 once, only for a candidate that passes the screen.
+- **Screen:** Δ regulars MAE < 0 with a 95% CI excluding 0, and neither captain nor top-11 points significantly negative.
+- **Acceptance:** the season simulation on 2025-26, positive with a 95% CI excluding 0.
+- Screening on 2024-25 means that season is no longer clean held-out data for these features. 2026-27 (live) is untouched.
+
+### E21: Opta per-90 features (rejected at the screen)
+
+`OPTA_FEATURES`: touches in the opposition box, chances created, shots, xGOT and big chances missed, per 90 (FPL-Elo-Insights, 2024-25 onwards). Production + these features vs production, on 2024-25:
+
+| Δ regulars MAE | Δ captain pts | Δ top-11 pts |
+|---|---|---|
+| +0.0014 (−0.0003, +0.0031) | −0.21 (−0.63, 0.00) | **−2.44 (−4.40, −0.61)** |
+
+- **No MAE gain, and the picks get worse.** Training covers four seasons, but the Opta columns only exist in 2024-25's own earlier gameweeks, so the trees learn them from very few rows.
+- **Not scored on 2025-26.** E20 tests Understat's shots and key passes, which exist for every season.
+
+### E22: a fresher availability archive (features rejected; freshness matters)
+
+**Archive.** FPL-Core-Insights (formerly FPL-Elo-Insights) rewrites `playerstats.csv`, FPL's player state with a `gw` label, two or three times a day.
+- Its git history has a snapshot shortly before almost every deadline from 2024-25 GW20 onwards.
+- `availability.ingest_core` reads only the last commit before each deadline, and from it each player's highest-`gw` row. That rule holds under both labelling schemes the file used in 2025-26.
+- These snapshots join vaastav's in one table, and each gameweek takes the newest one before its deadline.
+
+| Season | Median snapshot age at the deadline | Share from Core-Insights |
+|---|---|---|
+| 2021-22 / 2022-23 / 2023-24 | 47 / 43 / 44 h | 0% |
+| 2024-25 | 10.9 h | 39% (GW20+) |
+| 2025-26 | **4.7 h** | 100% |
+| 2026-27 (GW1–6) | 5.2 h | 100% |
+
+**Screen** (2024-25 GW20–38, everything × the live multiplier, vs production × multiplier):
+
+| Variant | Δ regulars MAE | Δ captain pts | Δ top-11 pts |
+|---|---|---|---|
+| E12's availability features | +0.014 (+0.010, +0.018) | −0.26 (−0.79, 0.00) | −1.53 (−4.84, +2.16) |
+| the same, null when the snapshot is > 24 h old | +0.016 (+0.010, +0.021) | 0.00 | −0.14 (−1.58, +1.42) |
+
+**Learned availability still loses to the multiplier,** so neither variant is scored held out. Most training rows come from older, stale snapshots, so the trees learn a blurred mapping. Masking the stale rows leaves too few fresh ones to learn from.
+
+**But freshness itself is worth a lot.** On the same production predictions and gameweeks, the multiplier built from each archive:
+
+| Snapshot the multiplier uses | Median age | Δ regulars MAE vs no multiplier |
+|---|---|---|
+| vaastav | 30 h | −0.046 (−0.056, −0.033) |
+| FPL-Core-Insights | 6 h | **−0.072 (−0.083, −0.063)** |
+| fresh vs stale | | **−0.027 (−0.039, −0.016)** |
+
+Going from 30-hour-old to 6-hour-old status is worth about −0.027 MAE, as much as most model changes. The live run takes its status from the 06:00 UTC daily snapshot, which is about 12 h old by a Friday-evening deadline. So **the pre-deadline refresh** (`fpl_pipelines.pre_deadline`) re-snapshots FPL about 2 h before each deadline and then rebuilds the warehouse and models. `bootstrap_static` now refreshes on a same-day re-run, as `fixtures` already did; past days are never rewritten.
 
 ## Tried and rejected
 

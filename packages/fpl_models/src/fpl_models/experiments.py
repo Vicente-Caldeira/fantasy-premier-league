@@ -16,7 +16,14 @@ from pathlib import Path
 import numpy as np
 import polars as pl
 
-from fpl_models import availability, penalties, player_features, player_model, team_strength
+from fpl_models import (
+    availability,
+    penalties,
+    player_features,
+    player_model,
+    team_strength,
+    understat,
+)
 from fpl_models.backtest import run_backtest
 from fpl_models.data import DEFAULT_WAREHOUSE, load_player_matches, player_gameweeks
 from fpl_models.leaderboard import EVALUATION_SEASONS
@@ -189,12 +196,49 @@ EXPERIMENTS |= {
 }
 
 
-def load_features(warehouse: Path) -> pl.DataFrame:
-    """Every candidate feature: fixture rows, team context, schedule, penalties and,
-    once `fpl_models.availability` has built the snapshots, point-in-time availability."""
+# Round 20 (E20): Understat per-match xG/xA before FPL's (2022-23). Live training data
+# (the last four seasons) already has FPL's xG, so "fill" mostly makes backtests look like
+# live; it is the baseline the live-relevant changes are measured against: Understat's
+# xG everywhere, and Understat shots, key passes, npxG, xGChain, xGBuildup per 90.
+_US = player_features.UNDERSTAT_FEATURES
+EXPERIMENTS |= {
+    "r20_fpl": player_model.PRODUCTION,  # same runner and data as the others
+    "r20_xg_fill": replace(player_model.PRODUCTION, xg_source="fill"),
+    "r20_xg_understat": replace(player_model.PRODUCTION, xg_source="understat"),
+    "r20_fill_us_feats": replace(player_model.PRODUCTION, xg_source="fill", features=_PROD + _US),
+    "r20_understat_us_feats": replace(
+        player_model.PRODUCTION, xg_source="understat", features=_PROD + _US
+    ),
+}
+
+
+# Rounds 21-22 (E21, E22): data that only exists from 2024-25, so they use the late split
+# (`LATE_TUNING`, then `LATE_HELD_OUT` once) instead of the 2021-23 tuning seasons.
+LATE_TUNING = ("2024-25",)
+LATE_HELD_OUT = ("2025-26",)
+EXPERIMENTS |= {
+    "r21_base": player_model.PRODUCTION,
+    "r22_base": player_model.PRODUCTION,  # E22's runner keeps row-level predictions
+    "r21_opta": replace(player_model.PRODUCTION, features=_PROD + player_features.OPTA_FEATURES),
+    "r22_avail": replace(
+        player_model.PRODUCTION, features=_PROD + availability.AVAILABILITY_FEATURES
+    ),
+    "r22_avail_fresh": replace(
+        player_model.PRODUCTION, features=_PROD + availability.FRESH_FEATURES
+    ),
+}
+
+
+def load_features(warehouse: Path, xg_source: str = "fpl") -> pl.DataFrame:
+    """Every candidate feature: fixture rows (with Understat's per-match stats and the
+    chosen xG source, E20), team context, schedule, penalties and, once
+    `fpl_models.availability` has built the snapshots, point-in-time availability."""
     matches = team_strength.load_matches(warehouse)
+    rows = understat.with_understat(
+        player_features.load_fixture_rows(warehouse), warehouse, xg_source
+    )
     features = player_features.build_features(
-        player_features.load_fixture_rows(warehouse),
+        rows,
         player_features.match_lambdas(matches),
         player_features.schedule_features(matches),
     )
@@ -262,18 +306,28 @@ def compare(candidate: pl.DataFrame, baseline: pl.DataFrame, seed: int = 0) -> d
     return out
 
 
-def run(names: list[str], warehouse: Path, *, held_out: bool = False) -> pl.DataFrame:
+def run(
+    names: list[str],
+    warehouse: Path,
+    *,
+    held_out: bool = False,
+    seasons: tuple[str, ...] | None = None,
+    results: Path | None = None,
+) -> pl.DataFrame:
     """Backtest each config. `held_out` scores EVALUATION_SEASONS: run it once, for the
-    final candidate only, after every choice has been made on the tuning seasons."""
-    seasons = EVALUATION_SEASONS if held_out else TUNING_SEASONS
-    results = RESULTS_DIR / "held_out" if held_out else RESULTS_DIR
-    features = load_features(warehouse)
+    final candidate only, after every choice has been made on the tuning seasons.
+    `seasons` and `results` override both (E21-E22's late split)."""
+    seasons = seasons or (EVALUATION_SEASONS if held_out else TUNING_SEASONS)
+    results = results or (RESULTS_DIR / "held_out" if held_out else RESULTS_DIR)
+    features: dict[str, pl.DataFrame] = {}  # by xg source
     gameweeks = player_gameweeks(load_player_matches(warehouse))
     results.mkdir(parents=True, exist_ok=True)
     rows = []
     for name in names:
         config = EXPERIMENTS[name]
-        model = player_model.ComponentModel(features, config=config, name=name)
+        if config.xg_source not in features:
+            features[config.xg_source] = load_features(warehouse, config.xg_source)
+        model = player_model.ComponentModel(features[config.xg_source], config=config, name=name)
         predictions = run_backtest(model, gameweeks, seasons).predictions
         per_gameweek(predictions, gameweeks).write_parquet(results / f"{name}.parquet")
         result = {"experiment": name, **evaluate(predictions, gameweeks)}
@@ -291,10 +345,14 @@ def run(names: list[str], warehouse: Path, *, held_out: bool = False) -> pl.Data
 
 
 def significance(
-    names: list[str], baseline: str = "baseline", *, held_out: bool = False
+    names: list[str],
+    baseline: str = "baseline",
+    *,
+    held_out: bool = False,
+    results: Path | None = None,
 ) -> pl.DataFrame:
     """Each experiment vs the baseline, from the saved per-gameweek results."""
-    results = RESULTS_DIR / "held_out" if held_out else RESULTS_DIR
+    results = results or (RESULTS_DIR / "held_out" if held_out else RESULTS_DIR)
     base = pl.read_parquet(results / f"{baseline}.parquet")
     rows = [
         {"experiment": n, **compare(pl.read_parquet(results / f"{n}.parquet"), base)}
@@ -310,11 +368,17 @@ def main() -> None:
     parser.add_argument("--warehouse", type=Path, default=DEFAULT_WAREHOUSE)
     parser.add_argument("--compare-only", action="store_true", help="reuse saved results")
     parser.add_argument("--held-out", action="store_true", help="final, one-off evaluation")
+    parser.add_argument("--seasons", nargs="+", help="override the seasons (late split)")
+    parser.add_argument("--results", type=Path, help="override the results directory")
+    parser.add_argument("--baseline", default="baseline")
     args = parser.parse_args()
+    seasons = tuple(args.seasons) if args.seasons else None
     if not args.compare_only:
-        run(args.only, args.warehouse, held_out=args.held_out)
+        run(
+            args.only, args.warehouse, held_out=args.held_out, seasons=seasons, results=args.results
+        )
     with pl.Config(tbl_cols=-1, tbl_width_chars=250, float_precision=4, tbl_rows=50):
-        print(significance(args.only, held_out=args.held_out))
+        print(significance(args.only, args.baseline, held_out=args.held_out, results=args.results))
 
 
 if __name__ == "__main__":

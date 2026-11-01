@@ -65,6 +65,11 @@ OPTA_STATS = (
 )  # fmt: skip
 OPTA_FEATURES = tuple(f"{s}_per90" for s in OPTA_STATS)
 
+# Understat detail (2014-15 onwards; null unless `understat.with_understat` added the
+# columns): per-90, EWM. Shots and key passes stand in for Opta before 2024-25.
+UNDERSTAT_STATS = ("us_shots", "us_key_passes", "us_npxg", "us_xg_chain", "us_xg_buildup")
+UNDERSTAT_FEATURES = tuple(f"{s}_per90" for s in UNDERSTAT_STATS)
+
 # Schedule: known in advance from the fixture list, so pre-deadline information.
 SCHEDULE_FEATURES = (
     "team_rest_days", "opponent_rest_days", "team_matches_prev_14d", "opponent_matches_prev_14d",
@@ -183,7 +188,7 @@ def _with_defensive_stats(rows: pl.DataFrame) -> pl.DataFrame:
     return rows.with_columns(cbit.alias("cbit"), cbirt.alias("cbirt"), hit.alias("defcon_hit"))
 
 
-ROLLED = tuple(c for c in ALL_FEATURES + OPTA_FEATURES if c not in (
+ROLLED = tuple(c for c in ALL_FEATURES + OPTA_FEATURES + UNDERSTAT_FEATURES if c not in (
     "position_code", "is_home", "price", "n_fixtures",
     "team_lambda", "opponent_lambda", "p_clean_sheet",
 ))  # fmt: skip
@@ -192,9 +197,12 @@ ROLLED = tuple(c for c in ALL_FEATURES + OPTA_FEATURES if c not in (
 def _player_state(rows: pl.DataFrame) -> pl.DataFrame:
     """Per (player, gameweek): rolling state *including* that gameweek (unshifted)."""
     # Nulls (stat not recorded that season) must stay null rather than sum to 0.
+    rows = rows.with_columns(
+        pl.lit(None, pl.Float64).alias(s) for s in UNDERSTAT_STATS if s not in rows.columns
+    )
     sums = [
         pl.when(pl.col(s).is_null().all()).then(None).otherwise(pl.col(s).sum()).alias(s)
-        for s in ("minutes", *RATE_STATS, *OPTA_STATS)
+        for s in ("minutes", *RATE_STATS, *OPTA_STATS, *UNDERSTAT_STATS)
     ]
     per_gw = (
         _with_defensive_stats(rows)
@@ -242,6 +250,7 @@ def _player_state(rows: pl.DataFrame) -> pl.DataFrame:
         *extra_rates,
         *extra_form,
         *[(ewm(s) / ewm("minutes") * 90).alias(f"{s}_per90") for s in OPTA_STATS],
+        *[(ewm(s) / ewm("minutes") * 90).alias(f"{s}_per90") for s in UNDERSTAT_STATS],
         (pl.col("gw_index") - last_appearance.forward_fill().over("player_code")).alias(
             "gws_since_appearance"
         ),

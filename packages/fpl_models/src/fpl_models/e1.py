@@ -51,7 +51,7 @@ def weeks_path(config: str, season: str, horizon: int = 3) -> Path:
 def _prepare(job: tuple[str, str, int]) -> str:
     config, season, horizon = job
     matches = team_strength.load_matches(DEFAULT_WAREHOUSE)
-    features = experiments.load_features(DEFAULT_WAREHOUSE)
+    features = experiments.load_features(DEFAULT_WAREHOUSE, CONFIGS[config].xg_source)
     truth = player_gameweeks(load_player_matches(DEFAULT_WAREHOUSE))
     sim = SeasonSimulator(
         features, truth, matches, CONFIGS[config], horizon=horizon, settings=SETTINGS,

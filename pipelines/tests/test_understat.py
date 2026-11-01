@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from fpl_core.http import RetryingHttpClient
 from fpl_pipelines.assets import understat as assets
 from fpl_pipelines.lake import Lake, PartitionedParquetIOManager
+from fpl_pipelines.snapshots import current_season
 from fpl_pipelines.sources import understat as src
 
 SEASON = "2020-21"
@@ -60,7 +61,58 @@ def league_payload(played=380):
     return {"teams": teams, "players": players, "dates": dates}
 
 
+def roster_entry(player_id, team_id, h_a, **stats):
+    goals, xg, minutes = stats.get("goals", 0), stats.get("xg", 0.1), stats.get("minutes", 90)
+    return {
+        "id": str(player_id * 10), "player_id": str(player_id), "player": f"P{player_id}",
+        "team_id": str(team_id), "h_a": h_a, "position": "FW", "time": str(minutes),
+        "goals": str(goals), "own_goals": "0", "shots": "2", "key_passes": "1",
+        "assists": "0", "xG": str(xg), "xA": "0.2", "xGChain": "0.4", "xGBuildup": "0.1",
+        "yellow_card": "0", "red_card": "0", "roster_in": "0", "roster_out": "0",
+        "positionOrder": "1",
+    }  # fmt: skip
+
+
+def match_payload(home=71, away=72, home_goals=2):
+    """A 2-1 (by default): the home striker scores twice, once from a 0.76 xG penalty."""
+    rosters = {
+        "h": {"1": roster_entry(1, home, "h", goals=home_goals, xg=1.26),
+              "2": roster_entry(2, home, "h", minutes=20)},
+        "a": {"3": roster_entry(3, away, "a", goals=1, xg=0.75)},
+    }  # fmt: skip
+    shot = {"id": "9", "minute": "10", "X": "0.9", "Y": "0.5", "player": "P1", "h_a": "h",
+            "player_id": "1", "season": "2020", "shotType": "RightFoot", "match_id": "1",
+            "result": "Goal", "lastAction": "None"}  # fmt: skip
+    shots = {
+        "h": [
+            {**shot, "xG": "0.76", "situation": "Penalty"},
+            {**shot, "xG": "0.5", "situation": "OpenPlay"},
+        ],
+        "a": [{**shot, "player_id": "3", "h_a": "a", "xG": "0.75", "situation": "OpenPlay"}],
+    }
+    return {"rosters": rosters, "shots": shots, "tmpl": {"home": "<div>", "away": "<div>"}}
+
+
 # --- source ---------------------------------------------------------------------------
+
+
+def test_match_payload_drops_the_page_html_and_splits_penalty_xg():
+    stripped = src.strip_match_payload(json.dumps(match_payload()).encode())
+    assert "tmpl" not in stripped
+    matches = pl.DataFrame({"match_id": [10000], "match_date": [datetime(2020, 9, 12).date()]})
+    table = src.player_matches_table({"10000": stripped}, SEASON, matches)
+    assert table.height == 3
+    striker = table.filter(pl.col("understat_player_id") == 1).row(0, named=True)
+    assert striker["penalty_xg"] == pytest.approx(0.76)
+    assert striker["npxg"] == pytest.approx(0.5)
+    assert striker["match_date"] == datetime(2020, 9, 12).date()
+    assert table["is_home"].to_list() == [True, True, False]
+
+
+def test_player_matches_table_is_typed_when_empty():
+    table = src.player_matches_table({}, SEASON, pl.DataFrame({"match_id": [], "match_date": []}))
+    assert table.height == 0
+    assert table.schema["xg"] == pl.Float64
 
 
 def test_league_path_uses_the_start_year():
@@ -100,12 +152,16 @@ def test_broken_payload_is_rejected():
 # --- ingestion ------------------------------------------------------------------------
 
 PAYLOAD: dict[str, bytes] = {}
+REQUESTS: list[str] = []
 
 
 class FakeUnderstat(assets.UnderstatResource):
     def client(self, season):
         def handler(request):
             assert request.headers["X-Requested-With"] == "XMLHttpRequest"
+            if request.url.path.startswith("/getMatchData/"):
+                REQUESTS.append(request.url.path)
+                return httpx.Response(200, content=PAYLOAD["match"])
             return httpx.Response(200, content=PAYLOAD["body"])
 
         return RetryingHttpClient(
@@ -118,15 +174,17 @@ class FakeUnderstat(assets.UnderstatResource):
 @pytest.fixture
 def lake(tmp_path):
     PAYLOAD["body"] = json.dumps(league_payload()).encode()
+    PAYLOAD["match"] = json.dumps(match_payload()).encode()
+    REQUESTS.clear()
     return Lake(base_url=str(tmp_path))
 
 
-def run(lake):
+def run(lake, season=SEASON):
     return dg.materialize(
         [*dg.load_assets_from_modules([assets]), *dg.load_asset_checks_from_modules([assets])],
-        partition_key=SEASON,
+        partition_key=season,
         resources={
-            "understat": FakeUnderstat(),
+            "understat": FakeUnderstat(request_interval_seconds=0),
             "lake": lake,
             "parquet_io_manager": PartitionedParquetIOManager(lake=lake),
         },
@@ -141,9 +199,32 @@ def checks(result):
 def test_season_ingests_and_passes_checks(lake):
     result = run(lake)
     assert result.success
-    assert checks(result) == {"complete_fixture_list": True, "team_logs_agree_with_matches": True}
+    assert checks(result) == {
+        "complete_fixture_list": True,
+        "team_logs_agree_with_matches": True,
+        "rosters_agree_with_scores": True,
+    }
     base = Path(lake.base_url) / "silver/understat"
     assert pl.read_parquet(base / f"team_matches/season={SEASON}/data.parquet").height == 760
+    players = pl.read_parquet(base / f"player_matches/season={SEASON}/data.parquet")
+    assert players.height == 3 * 380
+    assert len(REQUESTS) == 380
+
+
+def test_match_data_fetches_only_new_matches(lake):
+    season = current_season()  # a season in progress may be partly played
+    PAYLOAD["body"] = json.dumps(league_payload(played=100)).encode()
+    assert run(lake, season).success
+    assert len(REQUESTS) == 100
+    PAYLOAD["body"] = json.dumps(league_payload(played=110)).encode()
+    assert run(lake, season).success
+    assert len(REQUESTS) == 110  # ten new matches, ten requests
+    assert len(lake.list(assets.match_data_prefix(season))) == 2
+
+
+def test_rosters_disagreeing_with_the_score_are_blocked(lake):
+    PAYLOAD["match"] = json.dumps(match_payload(home_goals=3)).encode()
+    assert checks(run(lake))["rosters_agree_with_scores"] is False
 
 
 def test_unchanged_payload_is_stored_once(lake):
