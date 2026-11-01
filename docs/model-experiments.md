@@ -168,9 +168,9 @@ In the 6 gameweeks where a defender was the model's top pick, he scored 8.8 on a
 | **Season simulation as the acceptance test** | Total points is the real objective; per-gameweek metrics are proxies | **In progress** |
 | **Risk-aware captaincy and optimiser** (simulator distributions: p90, P(haul)) | Captain picks and rank depend on upside; expected value alone undervalues premiums | Next |
 | **European and cup fixtures** (minutes, rest) | Rotation for clubs in Europe | Needs other-competition ingestion (Elo-Insights has it from 2025-26) |
-| **Opta features** (touches in box, chances created, xGOT) | Richer attacking signal | Data only from 2024-25: needs a separate tuning split (e.g. tune on 2024-25, hold out 2025-26) |
-| **Daily snapshots → availability model** (news, status, chance of playing) | Minutes are the largest error source | Data accrues from 2026-10-17; train once a season of snapshots exists |
-| **Prediction timing** (run ~2 h before each deadline) | Crowd share and news are most complete near the deadline | Dagster sensor on `dim_gameweeks` |
+| ~~Opta features~~ (touches in box, chances created, xGOT) | Richer attacking signal | **E21:** screened on 2024-25 (late split), no MAE gain and top-11 −2.4. Rejected |
+| **Daily snapshots → availability model** (news, status, chance of playing) | Minutes are the largest error source | **E22:** fresh history from FPL-Core-Insights (2024-25 GW20+). Learned flags still lose to the multiplier, but fresh flags beat stale ones by 0.027 MAE |
+| ~~Prediction timing~~ (run ~2 h before each deadline) | Crowd share and news are most complete near the deadline | **Done** (E22): `fpl_pipelines.pre_deadline` sensors |
 | **Per-position models, share-of-team features, hyperparameter search** | Further accuracy | After the above |
 | **Chip strategy** (wildcard, free hit, bench boost, triple captain) | Large point swings per season | Simulator + optimiser make it testable |
 

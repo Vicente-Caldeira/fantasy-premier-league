@@ -84,7 +84,7 @@ points =  P(1–59)·1 + P(60+)·2
         + E[bonus] − E[yellow cards]
 ```
 
-Live predictions also apply FPL's availability flags, which have no history and so can't be learned: `chance_of_playing_next_round` scales the next gameweek, and `u` (left the club) zeroes all gameweeks.
+Live predictions also apply FPL's availability flags: `chance_of_playing_next_round` scales the next gameweek, and `u` (left the club) zeroes all gameweeks. Learning from the flags instead loses to this multiplier, even with ~5 h-old snapshots (E22). How fresh the flags are matters a lot, though: on 2024-25 GW20–38 the multiplier from ~6 h-old snapshots beats the one from ~30 h-old snapshots by 0.027 MAE.
 
 **Distributions:** `simulator.py` draws 4,000 coherent matches per fixture:
 - team goals = the sum of its players' goals + own goals;
@@ -102,6 +102,7 @@ This gives p10/p90 and P(haul ≥10) per player-gameweek. Means are calibrated, 
 - **Tuning discipline:** settings may only be chosen on 2021-22 and 2022-23. The 2023-26 evaluation seasons are scored once per accepted change.
 - **Season simulation** (`season_sim.py`): the end-to-end acceptance test. It manages a team through a whole past season, deciding blind at each deadline with the optimiser and scoring the real gameweek (auto-subs, captain/vice, hits, price changes). v2 scored +292 points over v1 across 2021-23.
 - **Live:** each daily run retrains on all history (about 50 s), fits Kumo's two contexts on CPU (about 2.5 min on an M5 Pro, peaking at about 14 GB of memory), and predicts the next 5 gameweeks. Trained models aren't persisted yet (Phase 4).
+- **Pre-deadline refresh** (`fpl_pipelines.pre_deadline`): about 2 h before each deadline, a sensor re-runs today's FPL snapshot (`bootstrap_static` refreshes on a same-day re-run) and then rebuilds the warehouse and models. Predictions then use near-deadline status, news and transfers, not the 06:00 UTC snapshot, which is ~12 h old by a Friday-evening deadline.
 - **Memory guard:** below 15 GiB of memory (`kumo.MIN_MEMORY_BYTES`; the machine's RAM, or the container's cgroup limit), `expected_points` skips the Kumo blend instead of being killed mid-fit. It logs a warning and records `kumo_weight` 0 and `memory_gib` in the asset metadata.
 
 ## 6. Known weaknesses
