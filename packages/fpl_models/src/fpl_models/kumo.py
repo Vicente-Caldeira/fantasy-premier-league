@@ -47,6 +47,9 @@ class KumoConfig:
     weight: float = 0.5  # Kumo's share of the blend with production's expected points
     size: str = "small"  # small (28M parameters), medium or large (215M)
     context_rows: int = 50_000  # newest labelled fixture rows, about two seasons
+    # Every `context_stride`-th of the newest context_rows * context_stride rows: the same
+    # number of rows (and memory) spread over a longer span of history.
+    context_stride: int = 1
     estimators: int = 1
     device: str = "cpu"
     seed: int = 0  # sdm's ensembling is random; seeded so every run is reproducible
@@ -77,13 +80,17 @@ def enough_memory(total: int | None = None) -> bool:
     return (memory_bytes() if total is None else total) >= MIN_MEMORY_BYTES
 
 
-def context_before(features: pl.DataFrame, deadline: datetime | None, rows: int) -> pl.DataFrame:
-    """The newest `rows` labelled fixture rows with a deadline strictly before
-    `deadline` (all of them when it's None, i.e. live: every played fixture)."""
+def context_before(
+    features: pl.DataFrame, deadline: datetime | None, rows: int, stride: int = 1
+) -> pl.DataFrame:
+    """`rows` labelled fixture rows with a deadline strictly before `deadline` (every
+    played fixture when it's None, i.e. live): the newest `rows`, or with `stride` > 1
+    every `stride`-th of the newest `rows * stride`, counted back from the newest."""
     labelled = features.filter(pl.col(TARGET).is_not_null())
     if deadline is not None:
         labelled = labelled.filter(pl.col("deadline_utc") < deadline)
-    return labelled.sort("deadline_utc", maintain_order=True).tail(rows)
+    newest = labelled.sort("deadline_utc", maintain_order=True).tail(rows * stride)
+    return newest.reverse().gather_every(stride).reverse() if stride > 1 else newest
 
 
 def _arrow(frame: pl.DataFrame, columns: Sequence[str]) -> Any:  # noqa: ANN401 - pyarrow.Table
@@ -162,7 +169,11 @@ class KumoModel:
         if self._regressor is None:
             self._regressor = Regressor(self.config, FEATURES)
         if step - self._fitted_at >= self.refit_every:
-            self._regressor.fit(context_before(self.features, deadline, self.config.context_rows))
+            self._regressor.fit(
+                context_before(
+                    self.features, deadline, self.config.context_rows, self.config.context_stride
+                )
+            )
             self._fitted_at = step
         season, gameweek = targets["season"][0], targets["gameweek"][0]
         rows = self.features.filter((pl.col("season") == season) & (pl.col("gameweek") == gameweek))
@@ -190,7 +201,7 @@ def fit_pair(
         Regressor(config, FEATURES),
         Regressor(config, PLANNING_FEATURES),
     )
-    context = context_before(features, deadline, config.context_rows)
+    context = context_before(features, deadline, config.context_rows, config.context_stride)
     nxt.fit(context)
     planning.fit(context)
     return nxt, planning

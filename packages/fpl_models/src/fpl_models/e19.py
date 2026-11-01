@@ -56,6 +56,7 @@ def main() -> None:
     parser.add_argument("--weights", type=float, nargs="+", default=[0.25, 0.5])
     parser.add_argument("--size", default=kumo.PRODUCTION.size)
     parser.add_argument("--context-rows", type=int, default=kumo.PRODUCTION.context_rows)
+    parser.add_argument("--context-stride", type=int, default=kumo.PRODUCTION.context_stride)
     parser.add_argument("--seed", type=int, default=kumo.PRODUCTION.seed)
     args = parser.parse_args()
     seasons = EVALUATION_SEASONS if args.held_out else experiments.TUNING_SEASONS
@@ -65,12 +66,18 @@ def main() -> None:
 
     features = experiments.load_features(DEFAULT_WAREHOUSE)
     gameweeks = player_gameweeks(load_player_matches(DEFAULT_WAREHOUSE))
-    config = kumo.KumoConfig(size=args.size, context_rows=args.context_rows, seed=args.seed)
+    config = kumo.KumoConfig(
+        size=args.size,
+        context_rows=args.context_rows,
+        context_stride=args.context_stride,
+        seed=args.seed,
+    )
     production = player_model.ComponentModel(
         features, config=player_model.PRODUCTION, name="r4_xg_1"
     )
     base = predictions("r4_xg_1", production, gameweeks, seasons, out)
-    tag = f"kumo_{config.size}_{config.context_rows // 1000}k_s{config.seed}"
+    stride = f"x{config.context_stride}" if config.context_stride > 1 else ""
+    tag = f"kumo_{config.size}_{config.context_rows // 1000}k{stride}_s{config.seed}"
     alone = predictions(tag, kumo.KumoModel(features, config, name=tag), gameweeks, seasons, out)
     base_per = experiments.per_gameweek(base, gameweeks)
 

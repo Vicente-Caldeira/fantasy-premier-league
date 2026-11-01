@@ -101,6 +101,16 @@ def test_context_is_the_newest_labelled_rows_strictly_before_the_deadline():
     assert kumo.context_before(frame, None, rows=100).height == 20
 
 
+def test_strided_context_spreads_the_same_rows_over_a_longer_span():
+    frame = feature_frame().with_row_index("i")
+    deadline = START + timedelta(days=7 * 5)
+    newest = kumo.context_before(frame, deadline, rows=8)
+    strided = kumo.context_before(frame, deadline, rows=4, stride=2)
+    assert strided.height == 4
+    assert strided["i"].to_list() == newest["i"].to_list()[1::2]  # newest row kept
+    assert strided["deadline_utc"].max() < deadline
+
+
 def test_regressor_returns_the_mean_of_quantiles_and_casts_booleans(fake_sdm):
     frame = feature_frame()
     regressor = kumo.Regressor(kumo.KumoConfig(seed=7), kumo.FEATURES)
