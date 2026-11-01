@@ -114,7 +114,7 @@ models:
       - name: match_key
         data_tests:
           - not_null
-          - relationships: {to: ref('fct_matches'), field: match_key}
+          - relationships: {arguments: {to: ref('fct_matches'), field: match_key}}
 
   - name: dim_player_seasons
     description: One row per FPL player and season, with club and names.

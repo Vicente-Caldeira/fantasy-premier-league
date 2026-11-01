@@ -196,13 +196,15 @@ EXPERIMENTS |= {
 }
 
 
-# Round 20 (E20): Understat per-match xG/xA before FPL's (2022-23), for features and
-# denoised targets; and Understat shots, key passes, npxG, xGChain, xGBuildup per 90.
+# Round 20 (E20): Understat per-match xG/xA before FPL's (2022-23). Live training data
+# (the last four seasons) already has FPL's xG, so "fill" mostly makes backtests look like
+# live; it is the baseline the live-relevant changes are measured against: Understat's
+# xG everywhere, and Understat shots, key passes, npxG, xGChain, xGBuildup per 90.
 _US = player_features.UNDERSTAT_FEATURES
 EXPERIMENTS |= {
+    "r20_fpl": player_model.PRODUCTION,  # same runner and data as the others
     "r20_xg_fill": replace(player_model.PRODUCTION, xg_source="fill"),
     "r20_xg_understat": replace(player_model.PRODUCTION, xg_source="understat"),
-    "r20_us_feats": replace(player_model.PRODUCTION, features=_PROD + _US),
     "r20_fill_us_feats": replace(player_model.PRODUCTION, xg_source="fill", features=_PROD + _US),
     "r20_understat_us_feats": replace(
         player_model.PRODUCTION, xg_source="understat", features=_PROD + _US

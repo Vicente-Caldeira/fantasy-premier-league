@@ -12,6 +12,7 @@ bronze (raw, immutable) → silver (typed Parquet) → staging → intermediate 
 |---|---|---|---|
 | `fct_matches` | season × home × away | 2014-15 → now, 380/season | Result and UTC kickoff (FPL). Understat xG and Opta xG/xGOT. Opening and closing odds with **margin-free implied probabilities**. Understat forecast, Elo. |
 | `fct_player_matches` | season × player × fixture | 2016-17 → now (incl. 0-minute squad rows) | FPL events, points, BPS/ICT, price, ownership and transfers. FPL xG/xA from 2022-23. Defensive stats from 2025-26. Opta touches, chances created, xGOT and duels from 2024-25. |
+| `fct_understat_player_matches` | season × Understat player × match | 2014-15 → now | Understat per player per match: minutes, goals, shots, key passes, xG, non-penalty xG, xA, xGChain, xGBuildup. Keyed by `match_key` and `team_key`; matched to FPL players by name within club and season in `fpl_models.understat` (96–98.5% of played FPL rows) |
 | `dim_teams` | club | 36 clubs | Each source's identifier (FPL code, football-data name, Understat id) |
 | `dim_players` | player (`player_code`) | 2,758 players | Stable across seasons; latest name and position |
 
@@ -33,6 +34,7 @@ bronze (raw, immutable) → silver (typed Parquet) → staging → intermediate 
 | Keys unique/not-null; every club mapped; relationships between marts | error |
 | Elo-Insights scores (6 known wrong) and Understat dates (kickoffs off by −12..+8h) | warn |
 | Opta coverage of finished player-matches from 2024-25 | warn |
+| Understat: both rosters for every played match, and each side's players' goals plus the opponents' own goals equal the score (Dagster check); one row per player per match | error |
 
 ## Caveats for modelling
 

@@ -59,7 +59,8 @@ def crosswalk(understat: pl.DataFrame, fpl: pl.DataFrame) -> pl.DataFrame:
 
 def add_understat(rows: pl.DataFrame, understat: pl.DataFrame, walk: pl.DataFrame) -> pl.DataFrame:
     """Join Understat's per-match stats onto FPL fixture rows by (match_key, player_code),
-    as `us_xg`, `us_xa` and `STATS`. Unmatched rows get nulls."""
+    as `us_xg`, `us_xa` and `STATS`: 0 for players who didn't play, null for those who
+    played but aren't matched."""
     if understat.is_empty():
         return rows.with_columns(pl.lit(None, pl.Float64).alias(c) for c in _COLUMNS.values())
     per_match = (
@@ -68,7 +69,17 @@ def add_understat(rows: pl.DataFrame, understat: pl.DataFrame, walk: pl.DataFram
         .group_by("match_key", "player_code")
         .agg(pl.col(c).sum().cast(pl.Float64).alias(alias) for c, alias in _COLUMNS.items())
     )  # fmt: skip
-    return rows.join(per_match, on=["match_key", "player_code"], how="left", maintain_order="left")
+    joined = rows.join(
+        per_match, on=["match_key", "player_code"], how="left", maintain_order="left"
+    )
+    # Understat lists only players who played. FPL records 0 xG for the rest, and so must
+    # we: a null would drop the match from the per-90 rates' numerator but not their
+    # minutes. Players who played but aren't matched stay null.
+    did_not_play = pl.col("minutes") == 0
+    return joined.with_columns(
+        pl.when(pl.col(c).is_null() & did_not_play).then(0.0).otherwise(pl.col(c)).alias(c)
+        for c in _COLUMNS.values()
+    )
 
 
 def apply_xg_source(rows: pl.DataFrame, source: str) -> pl.DataFrame:

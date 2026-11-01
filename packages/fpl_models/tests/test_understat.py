@@ -47,14 +47,20 @@ def test_crosswalk_matches_names_within_club_and_season():
 
 def test_understat_stats_join_by_match_and_player():
     rows = joined()
-    assert rows["us_xg"].to_list() == [0.3, None, 0.5]  # the unmatched player gets null
-    assert rows["us_shots"].to_list() == [3.0, None, 4.0]
+    assert rows["us_xg"].to_list() == [0.3, 0.0, 0.5]  # player 20 didn't play: 0, as FPL
+    assert rows["us_shots"].to_list() == [3.0, 0.0, 4.0]
+
+
+def test_a_player_who_played_but_isnt_matched_stays_null():
+    rows = fixture_rows().with_columns(pl.Series("minutes", [90, 30, 90]))
+    walk = understat.crosswalk(understat_rows(), fpl_players())
+    assert understat.add_understat(rows, understat_rows(), walk)["us_xg"][1] is None
     assert rows.height == fixture_rows().height
 
 
 @pytest.mark.parametrize(
     ("source", "expected"),
-    [("fpl", [None, None, 0.4]), ("fill", [0.3, None, 0.4]), ("understat", [0.3, None, 0.5])],
+    [("fpl", [None, None, 0.4]), ("fill", [0.3, 0.0, 0.4]), ("understat", [0.3, 0.0, 0.5])],
 )
 def test_xg_source_picks_fpl_or_understat(source, expected):
     rows = understat.apply_xg_source(joined(), source)
