@@ -706,6 +706,74 @@ This was the first model change to pass the season simulation since the xG fix. 
 Kumo predicts minutes better than production's tree, but the gain disappears once Kumo's own points are blended in, because they already carry that information. Production is unchanged and no season simulation was needed.
 
 
+## E19b: Kumo variants, and a context that reaches further back
+
+Follow-ups to E19, all on the tuning seasons first. Each Kumo variant replaces the adopted Kumo (small, newest 50k rows, one estimator) in the same walk-forward backtest. The head-to-head columns compare its 50/50 blend with the adopted blend on the same player-gameweeks (95% CI).
+
+| Kumo variant | Backtest wall time | Fixture MAE | Blend vs production: Δ top-11 | Head-to-head vs adopted blend: Δ MAE | Δ captain | Δ top-11 |
+|---|---|---|---|---|---|---|
+| small, newest 30k | 974 s | 1.065 | | | | |
+| **small, newest 50k (adopted in E19)** | 1,595 s | 1.049 | +2.76 (+0.75, +4.68) | | | |
+| small, 4 estimators | 12,235 s | 1.052 | +2.33 (+0.32, +4.19) | +0.002 (0.000, +0.004) | −0.12 (−0.63, +0.28) | −0.43 (−1.28, +0.49) |
+| medium | 4,977 s | 1.038 | +1.87 (−0.25, +3.99) | **−0.007 (−0.011, −0.003)** | +0.27 (−0.51, +1.15) | −0.89 (−2.28, +0.52) |
+| large | 8,606 s | 1.070 | +1.64 (−0.75, +3.99) | +0.010 (+0.004, +0.015) | −0.93 (−2.25, +0.32) | −1.12 (−3.17, +0.88) |
+| small, newest 100k | ≈5,300 s (8 threads) | 1.039 | **+3.40 (+1.47, +5.37)** | **−0.008 (−0.011, −0.004)** | −0.02 (−0.73, +0.63) | +0.64 (−0.56, +1.85) |
+| **small, every 2nd of the newest 100k** | 1,792 s | 1.038 | **+2.81 (+0.89, +4.63)** | **−0.006 (−0.008, −0.003)** | +0.46 (−0.33, +1.33) | +0.06 (−0.89, +1.12) |
+| small, every 3rd of the newest 150k | 1,493 s | **1.033** | **+2.66 (+0.79, +4.72)** | **−0.011 (−0.014, −0.007)** | +0.17 (−0.45, +0.88) | −0.10 (−1.48, +1.25) |
+
+Wall times overlap other jobs, so they only rank the variants.
+
+- **Bigger is not better.**
+  - **Large is the worst size.** Alone, its MAE is +0.049 (+0.034, +0.065) worse than production, where small's is +0.023. It overrates the best players: its top 20 by expected points average 6.03 against 5.30 actual. Small overshoots by 0.08, medium by 0.21 and production by 0.11.
+  - **Medium is more accurate than small** and alone beats production's top-11 (+2.97, CI +0.20, +5.59). In the tuning-season simulation, though, its blend gains only +5.7 (−18.5, +29.9) a season over small's, at three times the live fit time. It was not scored held out.
+- **Four estimators** (`num_estimators=4`, `sdm`'s ensemble) cost 4× and change nothing.
+- **More history helps, but more rows don't fit in memory.**
+  - **A 100k-row context** (about four seasons) puts Kumo alone level with production on MAE: +0.006 (−0.003, +0.017). But one small fit at 50k already peaks at 13.8 GB resident on CPU, and the live path's two 100k contexts peaked at 27 GB, more than the 24 GB machine.
+  - **Every 2nd row of the newest 100k** keeps 50k rows (same memory and time as production) and matches the 100k context's MAE. So the gain comes from the longer span, not from more rows.
+  - **Every 3rd row of the newest 150k** gives the best MAE: Kumo alone matches production (+0.0001). Early in 2021-22 that window reaches back past the start of the data (2016-17), so those contexts hold about 38k rows.
+  - The option is `KumoConfig.context_stride` and `python -m fpl_models.e19 --context-stride`.
+- **Kumo Relational** (`nvidia/Kumo-Relational`, a TabICLv2-style model that also reads linked tables) got each row's previous 6 matches as a history table. The history was built per row, strictly before the row's deadline, so it can't leak. In one refit (2022-23 GW9–12, 2,507 rows), at its 20k-row maximum context, its correlation with actual points was 0.545. Tabular small scored 0.583 on the same context and 0.594 at 50k. It was not pursued.
+- **bfloat16 autocast** on this CPU was more than 10× slower than float32, so it can't cut memory either.
+
+**Tuning-season simulations** (40 paths per season, each vs the adopted `v4kumo50`):
+
+| Variant | Δ per season (95% CI) | Hits per season (variant vs adopted) |
+|---|---|---|
+| **every 2nd of the newest 100k** (`v4kumoS2`) | **+37.2 (+15.3, +59.7)**: +62.4 in 2021-22, +11.9 in 2022-23 | 30.2 vs 31.9 |
+| every 3rd of the newest 150k (`v4kumoS3`) | +6.8 (−15.3, +29.5) | 30.2 vs 31.9 |
+| medium Kumo (`v4kumoM50`) | +5.7 (−18.5, +29.9) | 33.6 vs 31.9 |
+| Kumo weight 0.35 | −13.2 (−35.4, +9.7) | 32.4 vs 31.9 |
+| Kumo weight 0.65 | **−25.2 (−47.9, −1.3)** | 33.0 vs 31.9 |
+| small and medium Kumo averaged | **−26.2 (−48.5, −3.0)** | 33.8 vs 31.9 |
+| hit penalty 3 (default 4) | −8.5 (−30.8, +14.2) | 50.0 vs 31.9 |
+| hit penalty 5 | +2.7 (−19.6, +25.8) | 19.8 vs 31.9 |
+
+- **The 0.5 weight and hit penalty 4 stay.** The 0.8 weight run was stopped once 0.65 had lost.
+- **Read the size average with care.** Medium alone was +5.7 over small, so an average of the two losing to both is not believable as a real effect. About ten simulation comparisons ran in this round, so one false "significant" result at the 5% level is likely. Close variants need a clear margin before they get a held-out run.
+- **Stride 3 had the best MAE but simulated to only +6.8.** Again, the backtest screens and the season simulation decides.
+- **Selection rule, fixed before the stride-3 simulation:** only the stride with the larger tuning-season gain is scored held out. That was stride 2.
+
+**Held out (2023-26), scored once: stride 2 is not adopted.** The rule was the same as E19's, fixed before the run: the held-out season-simulation gain over the adopted blend must be positive with a 95% CI excluding zero.
+
+| Held-out season | `v4kumo50` (adopted) | `v4kumoS2` | Δ (95% CI) | Hits (adopted → stride 2) |
+|---|---|---|---|---|
+| 2023-24 | 2370.8 | 2366.3 | −4.6 (−29.4, +19.4) | 16.6 → 15.2 |
+| 2024-25 | 2192.5 | 2196.8 | +4.3 (−29.3, +37.9) | 12.7 → 12.0 |
+| 2025-26 | 2090.1 | 2093.5 | +3.4 (−22.1, +29.4) | 7.0 → 6.2 |
+| **All three** | | | **+1.0 (−15.1, +17.4)** per season | |
+
+- **The accuracy gain replicates; the season gain doesn't.**
+  - Held-out backtest, blend vs adopted blend: MAE **−0.006 (−0.008, −0.004)**, the same as on the tuning seasons. Captain −0.26 (−0.92, +0.37), top-11 +0.34 (−0.88, +1.55).
+  - Kumo alone now beats production's held-out MAE: −0.006 (−0.013, −0.000).
+  - Against production, the stride-2 blend gains +32.1 (+16.4, +48.0) a season, level with the adopted blend's +31.1.
+- **The tuning +37.2 was mostly selection.** It was the best of about ten variants simulated on two seasons, so part of it was luck. This is why the held-out seasons are scored once and never tuned on.
+- **Production keeps the newest 50k rows.** `context_stride` stays available (default 1) for later experiments.
+
+**Next:** better labels and features for the seasons before FPL's xG.
+- FPL publishes xG only from 2022-23. Every row before that has no xG target for the component model and no `expected_goals_per90` / `expected_assists_per90` feature. So the tuning seasons, and most of the first held-out season, are modelled almost without xG, while live training data (2022-23 onward) has it throughout.
+- Understat publishes per-player, per-match xG and xA back to 2014-15. The E3a name matching already links Understat players to FPL's.
+- The xG-denoised Kumo label (goals and assists replaced by xG and xA) waits on this. With FPL xG alone, only about half of 2022-23's context rows change on the tuning seasons.
+
 ## Tried and rejected
 
 | Change | Tuning-season result | Decision |
