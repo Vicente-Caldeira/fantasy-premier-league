@@ -164,7 +164,9 @@ def expected_points(lake: Lake) -> dg.MaterializeResult[None]:
 
     Component models trained on all history, applied to each squad player's latest
     state and the current team-strength fixture expectations, blended 50/50 with Kumo
-    Tabular (E19), and adjusted for FPL's availability flags.
+    Tabular (E19), and adjusted for FPL's availability flags. With too little memory
+    for Kumo's fit (`kumo.MIN_MEMORY_BYTES`), the blend is skipped with a warning and
+    `kumo_weight` 0, instead of the run being killed.
     """
     warehouse = _warehouse()
     matches = team_strength.load_matches(warehouse)
@@ -179,6 +181,15 @@ def expected_points(lake: Lake) -> dg.MaterializeResult[None]:
     gameweeks = next_gameweeks(warehouse, now, HORIZON)
     with duckdb.connect(str(warehouse), read_only=True) as connection:
         squads = connection.sql("select * from current_squads").pl()
+    memory = kumo.memory_bytes()
+    use_kumo = kumo.enough_memory(memory)
+    if not use_kumo:
+        dg.get_dagster_logger().warning(
+            "Kumo blend skipped: %.1f GiB of memory, it needs %.0f GiB "
+            "(give the Docker VM more, e.g. `colima start --memory 16`)",
+            memory / 2**30,
+            kumo.MIN_MEMORY_BYTES / 2**30,
+        )
     predictions = player_model.predict_upcoming(
         features,
         squads,
@@ -186,7 +197,7 @@ def expected_points(lake: Lake) -> dg.MaterializeResult[None]:
         gameweeks,
         config=player_model.PRODUCTION,
         schedule=schedule,
-        kumo=kumo.PRODUCTION,
+        kumo=kumo.PRODUCTION if use_kumo else None,
     )
 
     path = f"gold/player_points/expected_points/as_of={_stamp()}/data.parquet"
@@ -197,7 +208,8 @@ def expected_points(lake: Lake) -> dg.MaterializeResult[None]:
         metadata={
             "uri": uri,
             "players": predictions["player_code"].n_unique(),
-            "kumo_weight": kumo.PRODUCTION.weight,
+            "kumo_weight": kumo.PRODUCTION.weight if use_kumo else 0.0,
+            "memory_gib": round(memory / 2**30, 1),
             "gameweeks": ", ".join(str(g) for g in predictions["gameweek"].unique().sort()),
             "top_next_gameweek": dg.MetadataValue.md(to_markdown(top, top.columns)),
         }

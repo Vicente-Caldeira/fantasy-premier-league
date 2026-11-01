@@ -101,7 +101,8 @@ This gives p10/p90 and P(haul ≥10) per player-gameweek. Means are calibrated, 
 - **Metrics:** MAE on regular players (the primary metric), captain points and top-11 points against hindsight, and rank correlation.
 - **Tuning discipline:** settings may only be chosen on 2021-22 and 2022-23. The 2023-26 evaluation seasons are scored once per accepted change.
 - **Season simulation** (`season_sim.py`): the end-to-end acceptance test. It manages a team through a whole past season, deciding blind at each deadline with the optimiser and scoring the real gameweek (auto-subs, captain/vice, hits, price changes). v2 scored +292 points over v1 across 2021-23.
-- **Live:** each daily run retrains on all history (about 50 s), fits Kumo's two contexts on CPU (about 2.5 min on an M5 Pro), and predicts the next 5 gameweeks. Trained models aren't persisted yet (Phase 4).
+- **Live:** each daily run retrains on all history (about 50 s), fits Kumo's two contexts on CPU (about 2.5 min on an M5 Pro, peaking at about 14 GB of memory), and predicts the next 5 gameweeks. Trained models aren't persisted yet (Phase 4).
+- **Memory guard:** below 15 GiB of memory (`kumo.MIN_MEMORY_BYTES`; the machine's RAM, or the container's cgroup limit), `expected_points` skips the Kumo blend instead of being killed mid-fit. It logs a warning and records `kumo_weight` 0 and `memory_gib` in the asset metadata.
 
 ## 6. Known weaknesses
 

@@ -208,3 +208,18 @@ def test_live_blend_weights_kumo_and_scales_it_by_availability(fake_sdm):
     # Next gameweek uses all features, later gameweeks the no-crowd planning features.
     used = [len(fit[0].table.column_names) for fit in fake_sdm.fits[-2:]]
     assert used == [len(kumo.FEATURES), len(kumo.PLANNING_FEATURES)]
+
+
+def test_memory_guard_needs_15_gib():
+    assert kumo.enough_memory(16 * 2**30)
+    assert kumo.enough_memory(kumo.MIN_MEMORY_BYTES)
+    assert not kumo.enough_memory(6 * 2**30)  # a default-sized Docker VM
+
+
+def test_memory_is_capped_by_a_cgroup_limit(tmp_path):
+    limit = tmp_path / "memory.max"
+    assert kumo.memory_bytes(limit) > 0  # no cgroup file: the machine's RAM
+    limit.write_text("max\n")
+    machine = kumo.memory_bytes(limit)
+    limit.write_text(f"{4 * 2**30}\n")
+    assert kumo.memory_bytes(limit) == min(machine, 4 * 2**30)
