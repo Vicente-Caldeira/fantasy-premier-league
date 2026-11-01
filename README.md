@@ -41,7 +41,7 @@ Sources (FPL API, FPL-Elo-Insights, Understat, odds)
 Prerequisites:
 - [uv](https://docs.astral.sh/uv/)
 - Node 26 + pnpm
-- Docker (with buildx)
+- Docker (with buildx). Give its VM at least 16 GiB of memory, e.g. `colima start --memory 16`: the Kumo fit in `expected_points` peaks at about 14 GB, and with less than 15 GiB the asset skips the Kumo blend and logs a warning.
 - Terraform
 
 ```sh

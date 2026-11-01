@@ -23,9 +23,11 @@ download from Hugging Face on first use, to `HF_HOME`.
 
 from __future__ import annotations
 
+import os
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -51,6 +53,28 @@ class KumoConfig:
 
 
 PRODUCTION = KumoConfig()
+
+# One small-model fit at a 50k-row context peaks at 13.8 GB resident on CPU (float32),
+# mostly the fit's working memory: sdm estimates 8.2 GB of workspace plus a 2.5 GB cache.
+# Below this, e.g. in a 6 GiB Docker VM, the process would be killed mid-fit.
+MIN_MEMORY_BYTES = 15 * 2**30
+CGROUP_LIMIT = Path("/sys/fs/cgroup/memory.max")
+
+
+def memory_bytes(cgroup_limit: Path = CGROUP_LIMIT) -> int:
+    """Physical memory this process can use: the machine's (or VM's) RAM, capped by a
+    cgroup v2 limit when the container sets one."""
+    total = os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    if cgroup_limit.exists():
+        limit = cgroup_limit.read_text().strip()
+        if limit.isdigit():  # "max" means no limit
+            total = min(total, int(limit))
+    return total
+
+
+def enough_memory(total: int | None = None) -> bool:
+    """Whether production's Kumo fit fits in memory (`total` defaults to `memory_bytes`)."""
+    return (memory_bytes() if total is None else total) >= MIN_MEMORY_BYTES
 
 
 def context_before(features: pl.DataFrame, deadline: datetime | None, rows: int) -> pl.DataFrame:
