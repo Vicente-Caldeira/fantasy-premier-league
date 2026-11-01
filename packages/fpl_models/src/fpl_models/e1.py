@@ -37,6 +37,7 @@ CONFIGS = {
     "v3blend": experiments.EXPERIMENTS["r12_blend"],  # E17: half structural attack rates
     "v3blend25": experiments.EXPERIMENTS["r12_blend25"],
     "v4kumo50": player_model.PRODUCTION,  # E19: half Kumo Tabular (see KUMO)
+    "v5defcon": experiments.EXPERIMENTS["r24_defcon_opta"],  # E24
 }
 KUMO = {"v4kumo50": kumo.KumoConfig(weight=0.5)}
 SETTINGS = optimizer.Settings(time_limit_seconds=30)
@@ -51,7 +52,8 @@ def weeks_path(config: str, season: str, horizon: int = 3) -> Path:
 def _prepare(job: tuple[str, str, int]) -> str:
     config, season, horizon = job
     matches = team_strength.load_matches(DEFAULT_WAREHOUSE)
-    features = experiments.load_features(DEFAULT_WAREHOUSE, CONFIGS[config].xg_source)
+    cfg = CONFIGS[config]
+    features = experiments.load_features(DEFAULT_WAREHOUSE, cfg.xg_source, cfg.defcon_source)
     truth = player_gameweeks(load_player_matches(DEFAULT_WAREHOUSE))
     sim = SeasonSimulator(
         features, truth, matches, CONFIGS[config], horizon=horizon, settings=SETTINGS,

@@ -106,6 +106,13 @@ class ModelConfig:
     # (`understat.XG_SOURCES`): "fpl" (2022-23+ only), or Understat filled in before.
     # Applied when the features are built (`experiments.load_features`).
     xg_source: str = "fpl"
+    # E24: "opta" fills CBIT/CBIRT before 2025-26 from Opta (2024-25), so the defensive-
+    # contribution model has labels from the first gameweek of 2025-26.
+    defcon_source: str = "fpl"
+    # E23: "bps_rank" predicts each player's BPS and awards bonus by simulating every
+    # match's top three (`expected_bonus`), instead of a Poisson regression on bonus.
+    bonus_model: str = "poisson"
+    bonus_draws: int = 200
     # Rescale players' expected goals/assists so each team's add up to its expected
     # goals (live GW8: player sums ranged from 57% to 126% of team lambda).
     reconcile: bool = False
@@ -194,6 +201,10 @@ class FittedComponents:
     # E17: structural goals/assists models and their weight against the trees.
     attack: dict[str, structural.AttackModel] | None = None
     structural_weight: float = 0.0
+    # E23: BPS given an appearance, and out-of-sample residuals by position.
+    bps: Masked | None = None
+    bps_residuals: dict[str, np.ndarray] | None = None
+    bonus_draws: int = 200
 
     def components(self, rows: pl.DataFrame) -> pl.DataFrame:
         """Expected events per fixture row."""
@@ -212,6 +223,15 @@ class FittedComponents:
             for target, attack in self.attack.items():
                 structural_events = attack.rate(rows) * exposure
                 events[target] = w * structural_events + (1 - w) * events[target]
+        if self.bps is not None and self.bps_residuals is not None:
+            events["bonus"] = expected_bonus(
+                rows["match_key"].to_numpy(),
+                rows["position"].to_numpy(),
+                self.bps.predict(x),
+                1 - p_minutes[:, classes.index(0)],
+                self.bps_residuals,
+                draws=self.bonus_draws,
+            )
         out = {
             "p_play": 1 - p_minutes[:, classes.index(0)],
             "p_60": p60,
@@ -224,6 +244,62 @@ class FittedComponents:
 
 def _minutes_class(minutes: pl.Series) -> np.ndarray:
     return np.where(minutes.to_numpy() == 0, 0, np.where(minutes.to_numpy() >= 60, 2, 1))
+
+
+BONUS_POINTS = np.array([3, 2, 1])
+
+
+def expected_bonus(  # noqa: PLR0913 - one simulation, all of it needed
+    match_keys: np.ndarray,
+    positions: np.ndarray,
+    mean_bps: np.ndarray,
+    p_play: np.ndarray,
+    residuals: dict[str, np.ndarray],
+    *,
+    draws: int = 200,
+    seed: int = 0,
+) -> np.ndarray:
+    """E[bonus] per row: FPL gives 3/2/1 to each match's top three BPS (E23).
+
+    Per match and draw, each listed player plays with `p_play`, scoring his mean BPS plus a
+    residual resampled from his position's pool; the top three by BPS get 3, 2 and 1.
+    Draws are continuous, so ties (which FPL shares) don't arise.
+    """
+    rng = np.random.default_rng(seed)
+    out = np.zeros(len(mean_bps))
+    order = np.argsort(match_keys, kind="stable")
+    keys = match_keys[order]
+    starts = np.flatnonzero(np.r_[True, keys[1:] != keys[:-1]])
+    for start, end in zip(starts, np.r_[starts[1:], len(keys)], strict=True):
+        idx = order[start:end]
+        noise = np.column_stack(
+            [rng.choice(residuals.get(pos, residuals["all"]), draws) for pos in positions[idx]]
+        )
+        bps = np.where(rng.random((draws, len(idx))) < p_play[idx], mean_bps[idx] + noise, -np.inf)
+        top = np.argsort(-bps, axis=1)[:, : len(BONUS_POINTS)]
+        awarded = np.zeros((draws, len(idx)))
+        np.put_along_axis(awarded, top, BONUS_POINTS[: top.shape[1]], axis=1)
+        awarded[~np.isfinite(bps)] = 0.0  # a match with < 3 players: no bonus for no-shows
+        out[idx] = awarded.mean(axis=0)
+    return out
+
+
+def _fit_bps(train: pl.DataFrame, config: ModelConfig) -> tuple[Masked, dict[str, np.ndarray]]:
+    """BPS given an appearance, and residuals from a model fitted on the oldest 80% of
+    those rows, scored on the newest 20% (in-sample residuals understate the noise)."""
+    played = train.filter(pl.col("minutes") > 0).sort("deadline_utc")
+    x, y = feature_matrix(played, config.features), played["bps"].cast(pl.Float64).to_numpy()
+    weights = sample_weights(played, config)
+
+    def model() -> Masked:
+        return Masked(HistGradientBoostingRegressor(loss="squared_error", **config.gbm_params()))
+
+    cut = int(len(y) * 0.8)
+    early = model().fit(x[:cut], y[:cut], None if weights is None else weights[:cut])
+    residual = y[cut:] - early.predict(x[cut:])
+    positions = played["position"].to_numpy()[cut:]
+    pools = {pos: residual[positions == pos] for pos in POSITIONS if (positions == pos).any()}
+    return model().fit(x, y, weights), {**pools, "all": residual}
 
 
 def fit_components(
@@ -274,9 +350,11 @@ def fit_components(
     attack = None
     if config.structural_weight:
         attack = {t: structural.fit(train, t) for t in structural.TARGETS}
+    bps, residuals = _fit_bps(train, config) if config.bonus_model == "bps_rank" else (None, None)
     return FittedComponents(
         minutes, counts, defcon, config.features, team_rates(train), class_minutes,
         config.conditional_rates, attack, config.structural_weight,
+        bps, residuals, config.bonus_draws,
     )  # fmt: skip
 
 

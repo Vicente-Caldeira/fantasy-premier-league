@@ -125,7 +125,8 @@ def load_fixture_rows(warehouse: Path) -> pl.DataFrame:
                 pm.expected_assists, pm.tackles, pm.clearances_blocks_interceptions,
                 pm.recoveries, pm.selected, pm.transfers_balance, pm.opponent_team_key,
                 pm.touches_opposition_box, pm.chances_created, pm.total_shots,
-                pm.opta_xgot, pm.big_chances_missed
+                pm.opta_xgot, pm.big_chances_missed, pm.tackles_won, pm.interceptions,
+                pm.blocks, pm.clearances, pm.opta_recoveries
             from fct_player_matches as pm
             """
         ).pl()
@@ -173,6 +174,45 @@ def add_team_context(rows: pl.DataFrame, lambdas: pl.DataFrame) -> pl.DataFrame:
         .with_columns((-pl.col("opponent_lambda")).exp().alias("p_clean_sheet"))
         .drop("lambda_home", "lambda_away")
     )
+
+
+# E24: FPL records CBIT/CBIRT only from 2025-26; Opta (FPL-Elo-Insights) from 2024-25.
+# Opta's interceptions + blocks + clearances and recoveries match FPL's on 97-99% of
+# rows, but it has only tackles *won*, about 0.39 a match fewer than FPL's tackles. They
+# are scaled by OPTA_TACKLE_FACTOR, fitted on 2026-27 rows that have both (a season no
+# backtest scores): sum(FPL tackles) / sum(Opta tackles won).
+DEFCON_SOURCES = ("fpl", "opta")
+
+
+def fill_defensive_from_opta(rows: pl.DataFrame, tackle_factor: float) -> pl.DataFrame:
+    """Where FPL has no defensive counts but Opta does, derive them from Opta."""
+    opta = pl.col("tackles_won").is_not_null()
+    blocking = pl.col("interceptions") + pl.col("blocks") + pl.col("clearances")
+    return rows.with_columns(
+        pl.when(pl.col("tackles").is_null() & opta)
+        .then(pl.col("tackles_won") * tackle_factor)
+        .otherwise(pl.col("tackles"))
+        .alias("tackles"),
+        pl.when(pl.col("clearances_blocks_interceptions").is_null() & opta)
+        .then(blocking)
+        .otherwise(pl.col("clearances_blocks_interceptions"))
+        .alias("clearances_blocks_interceptions"),
+        pl.when(pl.col("recoveries").is_null() & opta)
+        .then(pl.col("opta_recoveries"))
+        .otherwise(pl.col("recoveries"))
+        .alias("recoveries"),
+    )
+
+
+def opta_tackle_factor(rows: pl.DataFrame, season: str = "2026-27") -> float:
+    """sum(FPL tackles) / sum(Opta tackles won) over `season`'s rows with both."""
+    both = rows.filter(
+        (pl.col("season") == season)
+        & pl.col("tackles").is_not_null()
+        & pl.col("tackles_won").is_not_null()
+    )
+    won = float(both["tackles_won"].sum())
+    return float(both["tackles"].sum()) / won if won else 1.0
 
 
 def _with_defensive_stats(rows: pl.DataFrame) -> pl.DataFrame:
