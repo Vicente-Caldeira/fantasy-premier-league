@@ -258,8 +258,11 @@ def _played(warehouse: Path, season: str, gameweek: int) -> pl.DataFrame:
         if not finished or not finished[0]:
             return pl.DataFrame()
         return connection.execute(
-            """select player_code, position, max(price) as price, sum(total_points) as points,
-            sum(minutes) as minutes, bool_or(is_provisional) as provisional
+            # DuckDB sums are HUGEINT, which Polars reads as Decimal: cast, or the state
+            # can't be written as JSON.
+            """select player_code, position, max(price) as price,
+            sum(total_points)::integer as points, sum(minutes)::integer as minutes,
+            bool_or(is_provisional) as provisional
             from fct_player_matches where season = ? and gameweek = ? group by 1, 2""",
             [season, gameweek],
         ).pl()
