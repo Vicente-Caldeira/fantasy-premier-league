@@ -18,8 +18,20 @@ DBT_DIR = Path(os.getenv("FPL_DBT_DIR", Path(__file__).parents[4] / "dbt"))
 dbt_project = DbtProject(project_dir=DBT_DIR, profiles_dir=DBT_DIR)
 
 
+def manifest_is_stale(manifest: Path, project_dir: Path = DBT_DIR) -> bool:
+    """Missing, or older than any dbt project file (models, tests, seeds, macros, config):
+    a stale manifest makes Dagster's asset graph disagree with what dbt runs."""
+    if not manifest.exists():
+        return True
+    built = manifest.stat().st_mtime
+    sources = [project_dir / "dbt_project.yml"]
+    for folder in ("models", "tests", "seeds", "macros", "snapshots"):
+        sources.extend((project_dir / folder).rglob("*"))
+    return any(f.is_file() and f.stat().st_mtime > built for f in sources)
+
+
 def ensure_manifest() -> Path:
-    if not dbt_project.manifest_path.exists():
+    if manifest_is_stale(Path(dbt_project.manifest_path)):
         # dagster-dbt gives each invocation its own target dir; parse into the canonical one.
         DbtCliResource(project_dir=dbt_project).cli(
             ["parse", "--quiet"], target_path=Path(dbt_project.target_path)
