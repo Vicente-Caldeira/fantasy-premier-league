@@ -8,7 +8,7 @@ from fpl_models import player_features as pf
 
 def rows():
     return pl.DataFrame({
-        "season": ["2024-25", "2026-27", "2026-27"],
+        "season": ["2024-25", "2025-26", "2025-26"],
         "tackles": [None, 3, 2],
         "clearances_blocks_interceptions": [None, 6, 4],
         "recoveries": [None, 5, 3],
@@ -20,7 +20,7 @@ def rows():
     })  # fmt: skip
 
 
-def test_tackle_factor_is_fitted_on_the_live_season():
+def test_tackle_factor_is_fitted_on_2025_26():
     assert pf.opta_tackle_factor(rows()) == pytest.approx(5 / 4)
 
 

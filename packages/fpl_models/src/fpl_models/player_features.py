@@ -178,9 +178,10 @@ def add_team_context(rows: pl.DataFrame, lambdas: pl.DataFrame) -> pl.DataFrame:
 
 # E24: FPL records CBIT/CBIRT only from 2025-26; Opta (FPL-Elo-Insights) from 2024-25.
 # Opta's interceptions + blocks + clearances and recoveries match FPL's on 97-99% of
-# rows, but it has only tackles *won*, about 0.39 a match fewer than FPL's tackles. They
-# are scaled by OPTA_TACKLE_FACTOR, fitted on 2026-27 rows that have both (a season no
-# backtest scores): sum(FPL tackles) / sum(Opta tackles won).
+# rows. Its `tackles_won` is tackles *won* in 2024-25 and 2025-26 (0.65-0.69 a match,
+# against FPL's 1.10 total tackles), but from 2026-27 the source carries FPL's total
+# (identical on 99.96% of rows). Tackles won are scaled by OPTA_TACKLE_FACTOR, fitted on
+# 2025-26, the one season with both FPL tackles and Opta tackles won.
 DEFCON_SOURCES = ("fpl", "opta")
 
 
@@ -204,7 +205,7 @@ def fill_defensive_from_opta(rows: pl.DataFrame, tackle_factor: float) -> pl.Dat
     )
 
 
-def opta_tackle_factor(rows: pl.DataFrame, season: str = "2026-27") -> float:
+def opta_tackle_factor(rows: pl.DataFrame, season: str = "2025-26") -> float:
     """sum(FPL tackles) / sum(Opta tackles won) over `season`'s rows with both."""
     both = rows.filter(
         (pl.col("season") == season)
