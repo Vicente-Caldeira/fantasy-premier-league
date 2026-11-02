@@ -290,3 +290,17 @@ def test_expected_price_fall_makes_the_plan_sell_a_player_it_would_keep():
     ignored = solve(players, points, current_squad=squad, bank=250, free_transfers=1,
                     price_moves={kept: -1.0})  # fmt: skip
     assert ignored.gameweeks[0].squad == normal.gameweeks[0].squad
+
+
+def test_a_pruned_problem_with_no_squad_is_retried_on_the_full_pool(monkeypatch):
+    players = pool()
+    points = xp(players)
+    expected = solve(players, points, prune=False)
+    # A pruning that leaves only goalkeepers can't make a squad: the retry must recover.
+    monkeypatch.setattr(
+        opt, "candidate_pool", lambda p, e, keep=(): p.filter(pl.col("position") == "GKP")
+    )
+    plan = solve(players, points)
+    assert sorted(plan.gameweeks[0].squad) == sorted(expected.gameweeks[0].squad)
+    with pytest.raises(opt.InfeasibleError):
+        solve(players, points, retry=False)

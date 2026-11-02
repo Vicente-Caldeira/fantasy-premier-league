@@ -26,7 +26,7 @@ model's constraints.
 
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 import polars as pl
 from ortools.linear_solver import pywraplp
@@ -139,6 +139,7 @@ def optimise(  # noqa: PLR0912, PLR0913, PLR0915 - one MIP, kept in one place
     ban: Sequence[int] = (),
     wildcard: bool = False,
     price_moves: Mapping[int, float] | None = None,
+    retry: bool = True,
 ) -> Plan:
     """Optimal plan over the gameweeks in `expected_points`.
 
@@ -152,7 +153,11 @@ def optimise(  # noqa: PLR0912, PLR0913, PLR0915 - one MIP, kept in one place
                       transfers from `current_squad`, no hits, banked transfers kept.
     price_moves:      player_code -> expected selling-value change (tenths) of holding
                       him through the first gameweek; weighted by `settings.value_weight`.
+    retry:            if no squad is found, solve once more without pruning (a heuristic
+                      that can, rarely, leave no legal squad) and with 4x the time (a busy
+                      machine can hit the limit before the solver finds any squad).
     """
+    all_players = players
     if set(keep) & set(ban):
         raise InfeasibleError(f"players both kept and banned: {sorted(set(keep) & set(ban))}")
     if prune:
@@ -273,6 +278,14 @@ def optimise(  # noqa: PLR0912, PLR0913, PLR0915 - one MIP, kept in one place
     solver.Maximize(objective)
     status = solver.Solve()
     if status not in (pywraplp.Solver.OPTIMAL, pywraplp.Solver.FEASIBLE):
+        if retry:
+            return optimise(
+                all_players, expected_points, current_squad=current_squad, bank=bank,
+                free_transfers=free_transfers, selling_prices=selling_prices,
+                settings=replace(settings, time_limit_seconds=settings.time_limit_seconds * 4),
+                prune=False, keep=keep, ban=ban, wildcard=wildcard, price_moves=price_moves,
+                retry=False,
+            )  # fmt: skip
         raise InfeasibleError("no feasible squad for the given players and constraints")
 
     def chosen(var: Mapping[tuple[int, int], pywraplp.Variable], t: int) -> list[int]:

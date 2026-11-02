@@ -111,6 +111,15 @@ def path_file(label: str, season: str, seed: int) -> Path:
 
 
 def _play(job: Job) -> str:
+    """One path. A failure is reported and skipped (no path file is written, so a
+    `--skip-existing` re-run retries it) rather than aborting the whole batch."""
+    try:
+        return _play_path(job)
+    except Exception as err:
+        return f"FAILED {job.label} {job.season} seed {job.seed}: {err!r}"
+
+
+def _play_path(job: Job) -> str:
     config, season, horizon, seed, label = job.config, job.season, job.horizon, job.seed, job.label
     cached = weeks_path(config, season, horizon).read_bytes()
     weeks: list[Week] = pickle.loads(cached)  # noqa: S301 - our own cache file

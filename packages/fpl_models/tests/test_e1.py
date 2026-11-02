@@ -35,3 +35,12 @@ def test_replicated_comparison_averages_paired_replicates(monkeypatch):
     mean, low, high = e1.compare_replicated("cand", "base", ["2025-26"], replicates=3, draws=2000)
     assert mean == pytest.approx(10.0)
     assert low <= 10.0 <= high
+
+
+def test_a_failing_path_is_reported_not_raised(monkeypatch):
+    def boom(job):
+        raise RuntimeError("no squad")
+
+    monkeypatch.setattr(e1, "_play_path", boom)
+    job = e1.Job("v2now", "2025-26", 3, 7, 4.0, "v2nowR0")
+    assert e1._play(job).startswith("FAILED v2nowR0 2025-26 seed 7")
