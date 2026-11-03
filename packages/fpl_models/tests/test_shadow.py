@@ -1,3 +1,6 @@
+import json
+
+import duckdb
 import polars as pl
 import pytest
 
@@ -95,3 +98,32 @@ def test_from_path_replays_bank_purchase_prices_and_free_transfers():
     assert result.total == 110
     assert result.history[-1].transfers_in == [spare]
     assert shadow.from_json(shadow.to_json(result)) == result
+
+
+def test_played_returns_plain_integers_that_serialise(tmp_path):
+    warehouse = tmp_path / "w.duckdb"
+    with duckdb.connect(str(warehouse)) as c:
+        c.execute(
+            "create table dim_gameweeks as"
+            " select '2026-27' as season, 8 as gameweek, true as finished"
+        )
+        c.execute(
+            "create table fct_player_matches as select '2026-27' as season, 8 as gameweek,"
+            " 1 as player_code, 'MID' as position, 55 as price, 6 as total_points,"
+            " 90 as minutes, false as is_provisional"
+        )
+    played = shadow._played(warehouse, "2026-27", 8)
+    assert played["points"].dtype == pl.Int32
+    json.dumps(dict(zip(played["player_code"], played["points"], strict=True)))
+
+
+def test_missed_deadlines_hold_the_squad_and_bank_free_transfers():
+    pick = shadow.Pick(
+        gameweek=8, squad=[1], lineup=[1], bench=[], captain=1, vice_captain=1,
+        transfers_in=[], transfers_out=[], hits=0, expected_points=0.0, points=50,
+    )  # fmt: skip
+    state = shadow.State(season="2026-27", squad=[1], paid={1: 50}, bank=0, free_transfers=1,
+                         history=[pick])  # fmt: skip
+    held, n = shadow.hold_missed(state, next_gameweek=10)  # GW9 had no plan
+    assert (n, held.free_transfers, held.total) == (1, 2, 50)
+    assert shadow.hold_missed(state, next_gameweek=9) == (state, 0)

@@ -229,7 +229,24 @@ EXPERIMENTS |= {
 }
 
 
-def load_features(warehouse: Path, xg_source: str = "fpl") -> pl.DataFrame:
+# Round 23 (E23): bonus from simulated per-match BPS rankings instead of a Poisson
+# regression on bonus (tuning seasons, as usual).
+EXPERIMENTS |= {
+    "r23_base": player_model.PRODUCTION,
+    "r23_bps_bonus": replace(player_model.PRODUCTION, bonus_model="bps_rank"),
+}
+
+# Round 24 (E24): defensive-contribution labels and features before 2025-26 from Opta.
+# Defensive contributions only score from 2025-26, so it is scored on 2025-26 (once).
+EXPERIMENTS |= {
+    "r24_base": player_model.PRODUCTION,
+    "r24_defcon_opta": replace(player_model.PRODUCTION, defcon_source="opta"),
+}
+
+
+def load_features(
+    warehouse: Path, xg_source: str = "fpl", defcon_source: str = "fpl"
+) -> pl.DataFrame:
     """Every candidate feature: fixture rows (with Understat's per-match stats and the
     chosen xG source, E20), team context, schedule, penalties and, once
     `fpl_models.availability` has built the snapshots, point-in-time availability."""
@@ -237,6 +254,9 @@ def load_features(warehouse: Path, xg_source: str = "fpl") -> pl.DataFrame:
     rows = understat.with_understat(
         player_features.load_fixture_rows(warehouse), warehouse, xg_source
     )
+    if defcon_source == "opta":
+        factor = player_features.opta_tackle_factor(rows)
+        rows = player_features.fill_defensive_from_opta(rows, factor)
     features = player_features.build_features(
         rows,
         player_features.match_lambdas(matches),
@@ -319,15 +339,16 @@ def run(
     `seasons` and `results` override both (E21-E22's late split)."""
     seasons = seasons or (EVALUATION_SEASONS if held_out else TUNING_SEASONS)
     results = results or (RESULTS_DIR / "held_out" if held_out else RESULTS_DIR)
-    features: dict[str, pl.DataFrame] = {}  # by xg source
+    features: dict[tuple[str, str], pl.DataFrame] = {}  # by (xg source, defcon source)
     gameweeks = player_gameweeks(load_player_matches(warehouse))
     results.mkdir(parents=True, exist_ok=True)
     rows = []
     for name in names:
         config = EXPERIMENTS[name]
-        if config.xg_source not in features:
-            features[config.xg_source] = load_features(warehouse, config.xg_source)
-        model = player_model.ComponentModel(features[config.xg_source], config=config, name=name)
+        source = (config.xg_source, config.defcon_source)
+        if source not in features:
+            features[source] = load_features(warehouse, *source)
+        model = player_model.ComponentModel(features[source], config=config, name=name)
         predictions = run_backtest(model, gameweeks, seasons).predictions
         per_gameweek(predictions, gameweeks).write_parquet(results / f"{name}.parquet")
         result = {"experiment": name, **evaluate(predictions, gameweeks)}

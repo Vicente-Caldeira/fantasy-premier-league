@@ -15,7 +15,7 @@ import argparse
 import json
 import pickle
 from concurrent.futures import ProcessPoolExecutor
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 
 import numpy as np
@@ -37,9 +37,12 @@ CONFIGS = {
     "v3blend": experiments.EXPERIMENTS["r12_blend"],  # E17: half structural attack rates
     "v3blend25": experiments.EXPERIMENTS["r12_blend25"],
     "v4kumo50": player_model.PRODUCTION,  # E19: half Kumo Tabular (see KUMO)
+    "v5defcon": experiments.EXPERIMENTS["r24_defcon_opta"],  # E24
+    "v2now": player_model.PRODUCTION,  # production re-prepared with E23-E24's code and data
+    "v6bps": experiments.EXPERIMENTS["r23_bps_bonus"],  # E23
 }
 KUMO = {"v4kumo50": kumo.KumoConfig(weight=0.5)}
-SETTINGS = optimizer.Settings(time_limit_seconds=30)
+SETTINGS = optimizer.Settings(time_limit_seconds=30, cpu_clock=True)
 DETECT = 50  # points of season-total difference we want to be able to detect
 
 
@@ -51,7 +54,8 @@ def weeks_path(config: str, season: str, horizon: int = 3) -> Path:
 def _prepare(job: tuple[str, str, int]) -> str:
     config, season, horizon = job
     matches = team_strength.load_matches(DEFAULT_WAREHOUSE)
-    features = experiments.load_features(DEFAULT_WAREHOUSE, CONFIGS[config].xg_source)
+    cfg = CONFIGS[config]
+    features = experiments.load_features(DEFAULT_WAREHOUSE, cfg.xg_source, cfg.defcon_source)
     truth = player_gameweeks(load_player_matches(DEFAULT_WAREHOUSE))
     sim = SeasonSimulator(
         features, truth, matches, CONFIGS[config], horizon=horizon, settings=SETTINGS,
@@ -60,6 +64,15 @@ def _prepare(job: tuple[str, str, int]) -> str:
     weeks = sim.prepare(season)
     weeks_path(config, season, horizon).write_bytes(pickle.dumps(weeks))
     return f"prepared {config} horizon {horizon} {season}: {len(weeks)} gameweeks"
+
+
+# Replicated protocol. A season total moves by ~20 points from prediction changes far
+# smaller than any real model difference (per-player shifts of sd 0.1 in expected points),
+# beyond the path-to-path noise a 40-path CI measures. So each arm is played on several
+# replicates, each with a persistent per-player shift N(0, PERTURB_SD) seeded by the
+# replicate (the same shift for both arms), and the CI resamples replicates as well as
+# paths (`compare_replicated`).
+PERTURB_SD = 0.1
 
 
 @dataclass(frozen=True)
@@ -76,6 +89,21 @@ class Job:
     start_noise: float = 0.3  # first-squad noise (0: the model's own squad)
     availability: bool = False  # E12: the live tool's status multiplier, point in time
     extra_bank: int = 0  # E13: tenths added to the bank after the first squad
+    perturb_seed: int | None = None  # replicated protocol: per-player shift of expected points
+    perturb_sd: float = PERTURB_SD
+
+
+def perturb(weeks: list[Week], seed: int, sd: float = PERTURB_SD) -> list[Week]:
+    """Each player's expected points shifted by the same N(0, sd) draw in every week."""
+    codes = sorted({c for w in weeks for c in w.xp["player_code"].to_list()})
+    shift = dict(zip(codes, np.random.default_rng(seed).normal(0, sd, len(codes)), strict=True))
+    bump = pl.col("player_code").replace_strict(shift, default=0.0, return_dtype=pl.Float64)
+    return [
+        replace(
+            w, xp=w.xp.with_columns((pl.col("expected_points") + bump).alias("expected_points"))
+        )
+        for w in weeks
+    ]
 
 
 def path_file(label: str, season: str, seed: int) -> Path:
@@ -83,11 +111,25 @@ def path_file(label: str, season: str, seed: int) -> Path:
 
 
 def _play(job: Job) -> str:
+    """One path. A failure is reported and skipped (no path file is written, so a
+    `--skip-existing` re-run retries it) rather than aborting the whole batch."""
+    try:
+        return _play_path(job)
+    except Exception as err:
+        return f"FAILED {job.label} {job.season} seed {job.seed}: {err!r}"
+
+
+def _play_path(job: Job) -> str:
     config, season, horizon, seed, label = job.config, job.season, job.horizon, job.seed, job.label
     cached = weeks_path(config, season, horizon).read_bytes()
     weeks: list[Week] = pickle.loads(cached)  # noqa: S301 - our own cache file
+    if job.perturb_seed is not None:
+        weeks = perturb(weeks, job.perturb_seed, job.perturb_sd)
     settings = optimizer.Settings(
-        time_limit_seconds=30, hit_penalty=job.hit_penalty, value_weight=job.value_weight
+        time_limit_seconds=30,
+        hit_penalty=job.hit_penalty,
+        value_weight=job.value_weight,
+        cpu_clock=True,
     )
     moves = None
     if job.value_weight:
@@ -148,6 +190,48 @@ def analyse() -> None:
           f"unpaired {int(np.ceil(2 * (z * sd_unpaired / DETECT) ** 2))}")  # fmt: skip
 
 
+def replicate_label(label: str, replicate: int | None) -> str:
+    return label if replicate is None else f"{label}R{replicate}"
+
+
+def compare_replicated(
+    label: str, against: str, seasons: list[str], replicates: int, draws: int = 10_000
+) -> tuple[float, float, float]:
+    """Mean difference in season total over paired replicates, averaged over seasons; the
+    95% CI resamples replicates, then paths within each. Returns (mean, low, high)."""
+    t = totals()
+    rng = np.random.default_rng(0)
+    gains, boot = [], np.zeros(draws)
+    for season in seasons:
+        arms = [
+            [
+                t.filter(
+                    (pl.col("config") == replicate_label(name, r)) & (pl.col("season") == season)
+                )["points"].to_numpy()
+                for r in range(replicates)
+            ]
+            for name in (label, against)
+        ]
+        diffs = [a.mean() - b.mean() for a, b in zip(*arms, strict=True)]
+        gains.append(float(np.mean(diffs)))
+        pick = rng.integers(0, replicates, (draws, replicates))
+        season_boot = np.zeros(draws)
+        for r in range(replicates):
+            a, b = arms[0][r], arms[1][r]
+            resampled = rng.choice(a, (draws, a.size)).mean(1) - rng.choice(
+                b, (draws, b.size)
+            ).mean(1)
+            season_boot += (pick == r).sum(axis=1) * resampled
+        boot += season_boot / replicates
+        print(f"{season}: {label} vs {against}, {replicates} replicates: {gains[-1]:+.1f} "
+              f"(replicates {', '.join(f'{d:+.1f}' for d in diffs)})")  # fmt: skip
+    mean = float(np.mean(gains))
+    low, high = (float(x) for x in np.quantile(boot / len(seasons), [0.025, 0.975]))
+    print(f"{label} vs {against} over {', '.join(seasons)}: {mean:+.1f} per season "
+          f"(95% CI {low:+.1f}, {high:+.1f}), {replicates} replicates")  # fmt: skip
+    return mean, low, high
+
+
 def compare_labels(labels: list[str], against: str) -> None:
     """Unpaired: difference in mean season total per path, bootstrapped by path."""
     t = totals()
@@ -186,6 +270,9 @@ def main() -> None:
     parser.add_argument("--start-noise", type=float, default=0.3, help="0: no noise")
     parser.add_argument("--availability", action="store_true", help="E12 status multiplier")
     parser.add_argument("--extra-bank", type=int, default=0, help="E13, tenths after GW1")
+    parser.add_argument(
+        "--replicates", type=int, default=0, help="play/compare K perturbed replicates per arm"
+    )
     parser.add_argument("--labels", nargs="+", default=[])
     parser.add_argument("--against", default="v2")
     parser.add_argument("--seasons", nargs="+", default=list(experiments.TUNING_SEASONS))
@@ -198,6 +285,7 @@ def main() -> None:
             for line in pool.map(_prepare, jobs):
                 print(line, flush=True)
     elif args.stage == "play":
+        replicates: list[int | None] = list(range(args.replicates)) or [None]
         plays = [
             Job(
                 c,
@@ -205,14 +293,16 @@ def main() -> None:
                 args.horizon,
                 seed,
                 args.hit_penalty,
-                args.label or c,
+                replicate_label(args.label or c, r),
                 tuple(args.wildcards),
                 args.wildcard_threshold,
                 args.value_weight,
                 args.start_noise,
                 args.availability,
                 args.extra_bank,
+                r,
             )
+            for r in replicates
             for seed in range(*args.seeds)
             for c in args.configs
             for s in seasons
@@ -222,6 +312,9 @@ def main() -> None:
         with ProcessPoolExecutor(args.workers) as pool:
             for line in pool.map(_play, plays):
                 print(line, flush=True)
+    elif args.stage == "compare" and args.replicates:
+        for label in args.labels:
+            compare_replicated(label, args.against, seasons, args.replicates)
     elif args.stage == "compare":
         compare_labels(args.labels, args.against)
     else:

@@ -118,6 +118,19 @@ def plan_next(
     return replace(state, pending=pick)
 
 
+def hold_missed(state: State, next_gameweek: int) -> tuple[State, int]:
+    """Deadlines that passed with no plan (no run before them) hold the squad: each earns a
+    free transfer and its points are not counted, as `init` does. Returns the state and
+    how many gameweeks were held."""
+    if state.pending is not None or not state.history:
+        return state, 0
+    held = next_gameweek - state.history[-1].gameweek - 1
+    if held <= 0:
+        return state, 0
+    free = min(optimizer.MAX_FREE_TRANSFERS, state.free_transfers + held)
+    return replace(state, free_transfers=free), held
+
+
 def commit(
     state: State,
     prices: Mapping[int, int],
@@ -258,8 +271,11 @@ def _played(warehouse: Path, season: str, gameweek: int) -> pl.DataFrame:
         if not finished or not finished[0]:
             return pl.DataFrame()
         return connection.execute(
-            """select player_code, position, max(price) as price, sum(total_points) as points,
-            sum(minutes) as minutes, bool_or(is_provisional) as provisional
+            # DuckDB sums are HUGEINT, which Polars reads as Decimal: cast, or the state
+            # can't be written as JSON.
+            """select player_code, position, max(price) as price,
+            sum(total_points)::integer as points, sum(minutes)::integer as minutes,
+            bool_or(is_provisional) as provisional
             from fct_player_matches where season = ? and gameweek = ? group by 1, 2""",
             [season, gameweek],
         ).pl()
@@ -287,6 +303,9 @@ def run(lake: Path, warehouse: Path) -> State:
                 position | dict(zip(played["player_code"], played["position"], strict=True)),
             )
     gameweeks = next_gameweeks(warehouse, datetime.now(UTC), HORIZON)
+    state, held = hold_missed(state, gameweeks[0])
+    if held:
+        print(f"held the squad through {held} gameweek(s) with no plan (not scored)")
     if state.pending is None or state.pending.gameweek == gameweeks[0]:
         xp = latest_expected_points(str(lake), gameweeks).select(
             "player_code", "gameweek", "expected_points"

@@ -217,6 +217,40 @@ def test_component_model_trains_only_on_earlier_deadlines():
     assert predicted.len() == targets.height
 
 
+def test_expected_bonus_gives_each_matchs_top_three_3_2_1():
+    keys = np.array(["m1"] * 5 + ["m2"] * 3)
+    positions = np.array(["FWD", "MID", "DEF", "GKP", "MID", "FWD", "MID", "DEF"])
+    mean_bps = np.array([40.0, 30, 20, 10, 50, 5, 4, 3])
+    p_play = np.array([1.0, 1, 1, 1, 0, 1, 1, 1])  # the 50-BPS player doesn't play
+    residuals = {"all": np.zeros(1)}
+    bonus = pm.expected_bonus(keys, positions, mean_bps, p_play, residuals, draws=50)
+    assert bonus.tolist() == [3, 2, 1, 0, 0, 3, 2, 1]
+
+
+def test_expected_bonus_spreads_with_noise_and_totals_six_per_match():
+    keys = np.array(["m"] * 4)
+    residuals = {"all": np.array([-10.0, 0.0, 10.0])}
+    bonus = pm.expected_bonus(
+        keys, np.array(["MID"] * 4), np.array([30.0, 28, 10, 9]), np.ones(4), residuals, draws=400
+    )
+    assert bonus.sum() == pytest.approx(6.0)
+    assert bonus[0] > bonus[2]
+    assert 0 < bonus[3] < 3
+
+
+def test_bps_bonus_model_fits_and_predicts():
+    rows = fixture_rows(n_players=8, gameweeks=10)
+    features = pf.build_features(rows, lambdas(rows))
+    config = pm.ModelConfig(bonus_model="bps_rank", bonus_draws=50, max_iter=20)
+    train = features.filter(pl.col("gameweek") < 9)
+    fitted = pm.fit_components(train, train.filter(pl.col("defcon_hit").is_not_null()), config)
+    assert fitted.bps is not None
+    events = fitted.components(features.filter(pl.col("gameweek") == 9))
+    per_match = events.with_columns(features.filter(pl.col("gameweek") == 9)["match_key"])
+    totals = per_match.group_by("match_key").agg(pl.col("e_bonus").sum())["e_bonus"]
+    assert (totals <= 6 + 1e-9).all()
+
+
 # --- live predictions -----------------------------------------------------------------
 
 
