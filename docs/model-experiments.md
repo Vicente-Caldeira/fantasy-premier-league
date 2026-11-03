@@ -165,7 +165,7 @@ In the 6 gameweeks where a defender was the model's top pick, he scored 8.8 on a
 | ~~xG/xA training targets~~ | Less label noise | **Done:** large MAE gain; season simulation decides pure vs blend |
 | ~~Rest days / congestion (league)~~ | Rotation | Done: small effect |
 | ~~Team reconciliation~~ | Coherent team totals | Done: hurts in combination; coherence moved to the simulator |
-| **Season simulation as the acceptance test** | Total points is the real objective; per-gameweek metrics are proxies | **In progress** |
+| ~~Season simulation as the acceptance test~~ | Total points is the real objective; per-gameweek metrics are proxies | **Done:** many paths (E1), then replicated with prediction perturbations and CPU-timed solves (see “Season-simulation noise”) |
 | **Risk-aware captaincy and optimiser** (simulator distributions: p90, P(haul)) | Captain picks and rank depend on upside; expected value alone undervalues premiums | Next |
 | **European and cup fixtures** (minutes, rest) | Rotation for clubs in Europe | Needs other-competition ingestion (Elo-Insights has it from 2025-26) |
 | ~~Opta features~~ (touches in box, chances created, xGOT) | Richer attacking signal | **E21:** screened on 2024-25 (late split), no MAE gain and top-11 −2.4. Rejected |
@@ -867,6 +867,127 @@ A first run left xG null, not 0, for players who didn't play, unlike FPL's own d
 | fresh vs stale | | **−0.027 (−0.039, −0.016)** |
 
 Going from 30-hour-old to 6-hour-old status is worth about −0.027 MAE, as much as most model changes. The live run takes its status from the 06:00 UTC daily snapshot, which is about 12 h old by a Friday-evening deadline. So **the pre-deadline refresh** (`fpl_pipelines.pre_deadline`) re-snapshots FPL about 2 h before each deadline and then rebuilds the warehouse and models. `bootstrap_static` now refreshes on a same-day re-run, as `fixtures` already did; past days are never rewritten.
+
+## Season-simulation noise: the CIs were about 2× too narrow
+
+**What happened.** E24's first 2025-26 simulation compared fresh weeks with production weeks cached on 18 Oct and showed +44 a season. Re-preparing production with today's code and data (`v2now`) gave +95 over the same cached weeks. E24 against that same-code baseline was **−51.1 (−73.0, −28.2)**.
+
+**Where the +95 came from.**
+- **Not the simulator.** Replaying the old weeks with today's code reproduces the old total: +4.8 (−20.7, +29.9).
+- **Not the stored data.** The old and new weeks have identical actual points and pools.
+- **The predictions themselves.** Expected points differ only slightly (correlation 0.995–0.999; sd of the difference 0.08–0.12 points per player-week).
+
+**How sensitive is a season to such small changes?** Five copies of the cached weeks, each with a persistent per-player shift N(0, 0.1) in expected points, were played for 40 paths each on 2025-26:
+
+| Copy | Δ vs the unperturbed weeks (40-path CI) |
+|---|---|
+| 1 | −26.5 (−51.8, −1.9) |
+| 2 | +5.1 (−20.3, +29.7) |
+| 3 | −5.1 (−28.3, +17.3) |
+| 4 | **+34.6 (+9.7, +59.4)** |
+| 5 | +6.5 (−19.2, +32.2) |
+
+- **The spread is larger than the CIs allow for.** The five means spread with an SD of 22.1; a 40-path mean has an SE of 9.1. That implies ~20 points of per-arm noise from prediction perturbations alone, which the path bootstrap never sees.
+- **The real CI is wider.** A one-season comparison therefore carries about ±60 points (95%), not ±25. Two of five noise-only copies looked "significant".
+- **The +95 is real nonetheless:** the re-prepared weeks sit +92 above the perturbed copies' mean, more than 4 SD out. Something that changed between 18 Oct and today (13 PRs plus a warehouse rebuild) made production's 2025-26 decisions better. Absolute season totals and rank estimates based on the cached weeks were pessimistic.
+
+**The replicated protocol** (`e1 play/compare --replicates K`) is the acceptance test from now on.
+- Each arm is played on K replicates, each with a persistent per-player shift N(0, 0.1) seeded by the replicate. Both arms get the same shift.
+- The CI resamples replicates, then paths within each replicate.
+- With K = 5, the hidden noise in a mean shrinks about 2.2×.
+
+**Backtests now time solves in CPU seconds.** The first replicated run went wrong overnight.
+- The laptop slept on and off with its lid closed. SCIP's time limit counts wall-clock seconds, so a solve that spanned a sleep stopped early with whatever squad it had. Those plans took up to 9 hits in one gameweek.
+- Replayed on an idle machine, one such path scored 2,175 points with 37 hits; the overnight version had scored 1,850 with 69.
+- The path written just before the first sleep reproduced exactly. Earlier runs were awake but sometimes busy: E19's determinism check found 5 of 60 paths differing under 16 parallel workers, with no effect on the mean (−3.5, CI −23.0, +15.7). The CPU clock removes both causes.
+- The fix: `optimizer.Settings.cpu_clock` (SCIP's `timing/clocktype = 1`) for every backtest, and each simulated gameweek now records whether its solve was time-limited (`PathRecord.status`). The live planner keeps the wall clock.
+
+**Production's simulated totals on today's code** (5 × 40 paths, no chips; the rank table above used the 18-Oct weeks):
+
+| Season | Component model alone (`v2now`) | Production, with the Kumo blend (`v4now`) | Rank table above |
+|---|---|---|---|
+| 2021-22 | 2,104 | 2,138 | 2,126 |
+| 2022-23 | 2,192 | 2,202 | 2,204 |
+| 2023-24 | 2,292 | 2,362 | 2,327 |
+| 2024-25 | 2,271 | 2,266 | 2,216 |
+| 2025-26 | 2,123 | 2,130 | 2,028 |
+
+### E19 re-checked under the replicated protocol: the Kumo blend holds
+
+E19 was adopted on single-run CIs: held out +31.1 (+14.1, +47.7), against production weeks prepared on 18 Oct. It was re-scored with production re-prepared on today's code (`v2now`), the same Kumo blend on top (`v4now`), 5 replicates × 40 paths each. Only 2 of 75,600 simulated gameweeks hit the CPU-time limit.
+
+| Season | Δ points (blend − production) | Replicates |
+|---|---|---|
+| 2021-22 (tuning) | +34.5 | +12.8, +27.9, +63.4, +67.0, +1.6 |
+| 2022-23 (tuning) | +10.3 | +16.0, +27.7, −11.0, +10.0, +8.5 |
+| **Tuning, per season** | **+22.4 (+4.4, +40.6)** | |
+| 2023-24 | +69.7 | +69.3, +63.8, +63.8, +71.8, +79.9 |
+| 2024-25 | −4.9 | −3.8, +2.9, −6.2, −18.4, +1.0 |
+| 2025-26 | +7.8 | −4.5, +30.8, +21.2, −17.9, +9.2 |
+| **Held out, per season** | **+24.2 (+13.2, +35.1)** | |
+
+- **The blend stays.** Both splits are positive with CIs above zero, close to the original +31.
+- **Most of the held-out gain is one season.** 2023-24 is +70 in every replicate; 2024-25 and 2025-26 are within noise of zero. The CI is conditional on these three seasons (it resamples replicates and paths, not seasons), so "about +24 a season" carries more season-to-season uncertainty than the interval shows.
+
+## E23: bonus from simulated BPS rankings (rejected held out)
+
+**Now.** A Poisson regression predicts each player's bonus (0–3) independently, though FPL gives 3/2/1 to each match's top three BPS.
+
+**Candidate** (`ModelConfig.bonus_model = "bps_rank"`):
+- A gradient-boosted regression predicts BPS given an appearance.
+- Its residuals come from a model fitted on the oldest 80% of training rows and scored on the newest 20%; in-sample residuals understate the noise.
+- `player_model.expected_bonus` then simulates every match 200 times. Each listed player plays with his P(plays) and scores his mean BPS plus a resampled residual, and the top three get 3, 2 and 1.
+- Each match's expected bonus totals 6 by construction, so a defender's chances fall when a teammate is likely to score.
+
+**Tuning seasons, per gameweek vs production:**
+
+| Δ regulars MAE | Δ captain pts | Δ top-11 pts |
+|---|---|---|
+| **−0.0022 (−0.0039, −0.0006)** | +0.01 (−1.04, +1.05) | +0.54 (−0.96, +2.08) |
+
+**Tuning-season simulation** (40 paths, vs production re-prepared on the same code):
+- 2021-22: +55.9 (+23.3, +89.0), hits 40.4 vs 47.6.
+- 2022-23: +35.4 (+3.8, +67.1), hits 20.0 vs 24.6.
+- **+45.7 (+23.2, +68.7) per season.**
+- This 40-path CI understates the noise (above). The replicated run decides.
+
+**Replicated tuning simulation** (5 replicates × 40 paths per arm, vs production on the same code):
+
+| Season | Δ points | Replicates |
+|---|---|---|
+| 2021-22 | +49.6 | +41.0, +36.3, +49.4, +58.6, +62.8 |
+| 2022-23 | +20.2 | +30.0, +30.6, +10.7, +26.2, +3.5 |
+| **Per season** | **+34.9 (+20.6, +49.3)** | all 10 positive |
+
+**Held out (2023-26), scored once: the gain reverses.**
+
+| | Δ regulars MAE | Δ captain pts | Δ top-11 pts | Season simulation (5 × 40, vs production) |
+|---|---|---|---|---|
+| Held out | +0.0001 (−0.0009, +0.0010) | **−0.61 (−1.15, −0.16)** | −0.56 (−1.76, +0.71) | **−24.3 (−36.8, −11.7)** |
+
+- By season: 2023-24 −21.4, 2024-25 −38.4, 2025-26 −13.1. 14 of the 15 replicates are negative.
+- **Rejected.** `ModelConfig.bonus_model` stays `"poisson"`; the BPS model and the per-match simulation stay in the code as an option.
+- **The per-gameweek gain came from one season.** The MAE change was −0.0042 in 2021-22 but −0.0002 in 2022-23 (the simulation was positive in both, +49.6 and +20.2). On held out it is +0.0032, −0.0017 and −0.0011. 2021-22 is the only season in this study without FPL's xG features. A plausible reading, untested: ranking players by predicted BPS helps when the bonus model has little attacking signal, and adds noise once xG is there. Live training always has xG.
+- **A lesson for the protocol.** A replicated tuning result with all 10 replicates positive still failed held out. Replicates remove prediction noise but not season-specific effects, and two tuning seasons are a small sample of seasons.
+
+## E24: defensive-contribution history from Opta (rejected)
+
+**Why.** FPL records clearances, blocks, interceptions, tackles and recoveries only from 2025-26, when defensive contributions began scoring. So at the start of 2025-26 the defensive-contribution model had no labels.
+
+**Data check** (2025-26 onwards, 13,342 player-matches with both sources):
+- Opta's interceptions + blocks + clearances match FPL's CBI on 97.5% of rows (correlation 0.998).
+- Recoveries match on 98.6%.
+- Tackles are the exception. FPL counts total tackles, while Opta's `tackles_won` in 2024-25 and 2025-26 is tackles won (0.65–0.69 a match against FPL's 1.10). From 2026-27 the same Elo-Insights column carries FPL's total, identical on 99.96% of rows. 2024-25's tackles won are therefore scaled by the 2025-26 ratio (1.69), as pre-registered.
+
+**Result** (scored once on 2025-26, the only season with both the rule and the labels):
+
+| Comparison | Δ regulars MAE | Δ captain pts | Δ top-11 pts | Season simulation |
+|---|---|---|---|---|
+| vs production | −0.0020 (−0.0078, +0.0037) | −0.34 (−1.34, +0.53) | −2.11 (−4.74, +0.40) | **−51.1 (−73.0, −28.2)** vs production on the same code |
+
+- The early-season gap it was meant to close doesn't show: GW1–10 MAE is 1.784 against 1.775.
+- A likely reason: the filled 2024-25 counts also feed `cbit_per90` and `cbirt_per90`, which every component model uses, not just the defensive-contribution one.
+- Rejected. `ModelConfig.defcon_source` stays `"fpl"`.
 
 ## Tried and rejected
 
