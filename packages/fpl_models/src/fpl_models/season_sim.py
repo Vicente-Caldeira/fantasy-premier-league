@@ -107,6 +107,7 @@ class PathRecord:
     hits: int
     points: int  # after hits
     chip: str | None = None
+    status: str = "optimal"  # "feasible": the solver stopped at its time limit
 
 
 # Chips can be played once in each half of the season (2025-26 rules).
@@ -396,6 +397,7 @@ def play(  # noqa: PLR0913 - chip options are keyword-only
                 step.hits,
                 points,
                 chip,
+                plan.status,
             )
         )
         squad = step.squad

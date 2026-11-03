@@ -42,7 +42,7 @@ CONFIGS = {
     "v6bps": experiments.EXPERIMENTS["r23_bps_bonus"],  # E23
 }
 KUMO = {"v4kumo50": kumo.KumoConfig(weight=0.5)}
-SETTINGS = optimizer.Settings(time_limit_seconds=30)
+SETTINGS = optimizer.Settings(time_limit_seconds=30, cpu_clock=True)
 DETECT = 50  # points of season-total difference we want to be able to detect
 
 
@@ -126,7 +126,10 @@ def _play_path(job: Job) -> str:
     if job.perturb_seed is not None:
         weeks = perturb(weeks, job.perturb_seed, job.perturb_sd)
     settings = optimizer.Settings(
-        time_limit_seconds=30, hit_penalty=job.hit_penalty, value_weight=job.value_weight
+        time_limit_seconds=30,
+        hit_penalty=job.hit_penalty,
+        value_weight=job.value_weight,
+        cpu_clock=True,
     )
     moves = None
     if job.value_weight:

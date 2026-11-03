@@ -104,6 +104,7 @@ def test_play_records_every_gameweek_and_seeds_change_the_start():
     assert len(result.points) == len(records) == len(weeks)
     assert all(len(r.squad) == 15 and len(r.lineup) == 11 for r in records)
     assert all(r.captain in r.lineup for r in records)
+    assert all(r.status == "optimal" for r in records)  # solve status kept per gameweek
     starts = {
         tuple(sorted(ss.play("2021-22", weeks, settings, seed=s)[1][0].squad)) for s in range(4)
     }

@@ -304,3 +304,12 @@ def test_a_pruned_problem_with_no_squad_is_retried_on_the_full_pool(monkeypatch)
     assert sorted(plan.gameweeks[0].squad) == sorted(expected.gameweeks[0].squad)
     with pytest.raises(opt.InfeasibleError):
         solve(players, points, retry=False)
+
+
+def test_cpu_clock_reaches_the_same_optimum():
+    players = pool(seed=4)
+    points = xp(players, gameweeks=(1, 2, 3))
+    wall = solve(players, points)
+    cpu = solve(players, points, settings=opt.Settings(cpu_clock=True))
+    assert cpu.status == "optimal"
+    assert cpu.objective == pytest.approx(wall.objective)

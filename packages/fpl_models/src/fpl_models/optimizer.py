@@ -57,6 +57,9 @@ class Settings:
     # Points per 0.1m of expected selling-value change by the next deadline (E10).
     # 0 ignores price moves.
     value_weight: float = 0.0
+    # Count the time limit in CPU seconds, not wall-clock ones, so a busy or sleeping
+    # machine cannot cut a solve short (backtests; live runs keep the wall clock).
+    cpu_clock: bool = False
 
 
 @dataclass(frozen=True)
@@ -179,6 +182,10 @@ def optimise(  # noqa: PLR0912, PLR0913, PLR0915 - one MIP, kept in one place
 
     solver = pywraplp.Solver.CreateSolver("SCIP")
     solver.SetTimeLimit(settings.time_limit_seconds * 1000)
+    if settings.cpu_clock and not solver.SetSolverSpecificParametersAsString(
+        "timing/clocktype = 1\n"
+    ):
+        raise RuntimeError("SCIP rejected the CPU-clock setting")
     T = range(len(gameweeks))  # noqa: N806 - conventional index name
     squad = {(p, t): solver.BoolVar(f"s_{p}_{t}") for p in codes for t in T}
     lineup = {(p, t): solver.BoolVar(f"l_{p}_{t}") for p in codes for t in T}
